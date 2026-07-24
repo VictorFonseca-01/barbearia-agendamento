@@ -23,6 +23,7 @@ import {
   Home,
   Check,
   Ban,
+  Settings,
   Loader2
 } from 'lucide-react';
 import { NotificationToast, CustomConfirmModal, ToastData } from '@/components/NotificationToast';
@@ -76,6 +77,58 @@ export default function AdminPage() {
     sessionStorage.removeItem('barbearia_admin_auth');
     setIsAuthenticated(false);
     setPinInput('');
+  };
+
+  // Configurações da Barbearia (WhatsApp)
+  const [showConfigModal, setShowConfigModal] = useState<boolean>(false);
+  const [barbeariaWhatsApp, setBarbeariaWhatsApp] = useState<string>(process.env.NEXT_PUBLIC_WHATSAPP_BARBEARIA || '5562999999999');
+  const [savingConfig, setSavingConfig] = useState<boolean>(false);
+
+  useEffect(() => {
+    async function loadConfig() {
+      try {
+        const { data } = await supabase
+          .from('barbearia_config')
+          .select('valor')
+          .eq('chave', 'whatsapp_barbearia')
+          .single();
+        if (data && data.valor) {
+          setBarbeariaWhatsApp(data.valor);
+        }
+      } catch (err) {
+        console.error('Erro ao carregar configurações:', err);
+      }
+    }
+    loadConfig();
+  }, []);
+
+  const handleSaveConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingConfig(true);
+    try {
+      const cleanPhone = barbeariaWhatsApp.replace(/\D/g, '');
+      const { error } = await supabase
+        .from('barbearia_config')
+        .upsert({ chave: 'whatsapp_barbearia', valor: cleanPhone, updated_at: new Date().toISOString() }, { onConflict: 'chave' });
+
+      if (error) throw error;
+
+      setToast({
+        id: Date.now().toString(),
+        type: 'success',
+        message: 'Número do WhatsApp da barbearia atualizado com sucesso no Supabase!'
+      });
+      setShowConfigModal(false);
+    } catch (err) {
+      console.error('Erro ao salvar configuração:', err);
+      setToast({
+        id: Date.now().toString(),
+        type: 'error',
+        message: 'Erro ao salvar o número do WhatsApp.'
+      });
+    } finally {
+      setSavingConfig(false);
+    }
   };
 
   // Filtros
@@ -481,6 +534,13 @@ export default function AdminPage() {
               <Home size={15} /> Ver Site
             </a>
             <button
+              onClick={() => setShowConfigModal(true)}
+              className="px-3.5 py-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition"
+              title="Configurações da Barbearia"
+            >
+              <Settings size={15} /> Configurações
+            </button>
+            <button
               onClick={() => fetchAgendamentos()}
               className="p-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl transition"
               title="Atualizar dados"
@@ -799,6 +859,71 @@ export default function AdminPage() {
           )}
         </div>
       </div>
+
+      {/* Modal de Configurações da Barbearia */}
+      {showConfigModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-3xl p-6 space-y-5 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <h3 className="font-bold text-lg text-zinc-100 flex items-center gap-2">
+                <Settings className="text-amber-500" size={20} />
+                Configurações da Barbearia
+              </h3>
+              <button
+                onClick={() => setShowConfigModal(false)}
+                className="text-zinc-400 hover:text-zinc-100 text-xl font-bold p-1"
+              >
+                &times;
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveConfig} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-zinc-300">
+                  Número do WhatsApp da Barbearia (com DDD)
+                </label>
+                <p className="text-[11px] text-zinc-500">
+                  É para este número que os clientes enviarão a mensagem automática de agendamento.
+                </p>
+                <div className="relative pt-1">
+                  <Phone size={18} className="absolute left-3.5 top-4.5 text-zinc-500" />
+                  <input
+                    type="tel"
+                    required
+                    placeholder="5562999999999 ou (62) 99999-9999"
+                    value={barbeariaWhatsApp}
+                    onChange={(e) => setBarbeariaWhatsApp(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 rounded-xl py-3 pl-10 pr-4 text-sm text-zinc-100 outline-none transition"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setShowConfigModal(false)}
+                  className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold rounded-xl text-xs transition"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingConfig || !barbeariaWhatsApp}
+                  className="flex-1 py-3 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-zinc-950 font-bold rounded-xl text-xs transition shadow-lg shadow-amber-500/20 flex items-center justify-center gap-1.5"
+                >
+                  {savingConfig ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin" /> Salvando...
+                    </>
+                  ) : (
+                    <>Salvar Configuração</>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Componentes de Notificação Customizados */}
       <NotificationToast toast={toast} onClose={() => setToast(null)} />

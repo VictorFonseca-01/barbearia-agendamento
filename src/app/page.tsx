@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { NotificationToast, CustomConfirmModal, ToastData } from '@/components/NotificationToast';
 
-const WHATSAPP_BARBEARIA = process.env.NEXT_PUBLIC_WHATSAPP_BARBEARIA || '5562999999999';
+const DEFAULT_WHATSAPP_BARBEARIA = process.env.NEXT_PUBLIC_WHATSAPP_BARBEARIA || '5562999999999';
 
 interface ExistingAppointment {
   id: string;
@@ -46,6 +46,25 @@ export default function Home() {
   const [servicos, setServicos] = useState<Servico[]>([]);
   const [barbeiros, setBarbeiros] = useState<Barbeiro[]>([]);
   const [loadingData, setLoadingData] = useState<boolean>(true);
+  const [whatsappBarbearia, setWhatsappBarbearia] = useState<string>(DEFAULT_WHATSAPP_BARBEARIA);
+
+  useEffect(() => {
+    async function loadBarbeariaConfig() {
+      try {
+        const { data } = await supabase
+          .from('barbearia_config')
+          .select('valor')
+          .eq('chave', 'whatsapp_barbearia')
+          .single();
+        if (data && data.valor) {
+          setWhatsappBarbearia(data.valor);
+        }
+      } catch (err) {
+        console.error('Erro ao carregar WhatsApp da barbearia:', err);
+      }
+    }
+    loadBarbeariaConfig();
+  }, []);
 
   // Seleções do formulário
   const [selectedServico, setSelectedServico] = useState<Servico | null>(null);
@@ -199,7 +218,7 @@ export default function Home() {
       setToast({ id: Date.now().toString(), type: 'success', message: 'Seu agendamento foi cancelado com sucesso. Vaga liberada!' });
       
       setTimeout(() => {
-        window.open(`https://wa.me/${WHATSAPP_BARBEARIA}?text=${msg}`, '_blank');
+        window.open(`https://wa.me/${whatsappBarbearia}?text=${msg}`, '_blank');
       }, 800);
     } catch (err) {
       console.error('Erro ao cancelar agendamento:', err);
@@ -444,7 +463,7 @@ export default function Home() {
         `Aguardando confirmação!`
       );
 
-      const urlWhatsApp = `https://wa.me/${WHATSAPP_BARBEARIA}?text=${mensagemWhatsApp}`;
+      const urlWhatsApp = `https://wa.me/${whatsappBarbearia}?text=${mensagemWhatsApp}`;
 
       setTimeout(() => {
         window.open(urlWhatsApp, '_blank');
@@ -529,7 +548,7 @@ export default function Home() {
 
             <div className="space-y-3 pt-2">
               <a
-                href={`https://wa.me/${WHATSAPP_BARBEARIA}`}
+                href={`https://wa.me/${whatsappBarbearia}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl flex items-center justify-center gap-2 transition shadow-lg shadow-emerald-600/20"
