@@ -98,9 +98,14 @@ export default function Home() {
 
         if (data) {
           const parsed: ExistingAppointment[] = data.map((item: any) => {
-            const d = new Date(item.data_hora);
-            const startMinutes = d.getHours() * 60 + d.getMinutes();
-            // Pega a duração do serviço ou 30 min como fallback
+            // Extrai a hora e minuto exatos do ISO (ex: "2026-07-24T11:00:00" -> "11:00")
+            const timePart = item.data_hora.includes('T') ? item.data_hora.split('T')[1] : item.data_hora;
+            const [hStr, mStr] = timePart.split(':');
+            const hours = parseInt(hStr, 10);
+            const minutes = parseInt(mStr, 10);
+            const startMinutes = hours * 60 + minutes;
+            
+            // Pega a duração do serviço (ex: 50 minutos)
             const duration = item.servicos?.duracao_minutos || 30;
             const endMinutes = startMinutes + duration;
 
