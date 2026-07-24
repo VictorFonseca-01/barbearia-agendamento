@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Barbeiro, Servico } from '@/types/database';
 import { 
@@ -78,53 +78,52 @@ export default function Home() {
     setSelectedDate(`${year}-${month}-${day}`);
   }, []);
 
-  // 2. Busca agendamentos do dia com a duração dos serviços para calcular conflitos
-  useEffect(() => {
-    async function fetchDayAppointments() {
-      if (!selectedDate) return;
-      try {
-        // Intervalo do dia local
-        const startOfDay = `${selectedDate}T00:00:00`;
-        const endOfDay = `${selectedDate}T23:59:59`;
+  // 2. Função recarregável para buscar agendamentos do dia
+  const fetchDayAppointments = useCallback(async () => {
+    if (!selectedDate) return;
+    try {
+      // Intervalo do dia local
+      const startOfDay = `${selectedDate}T00:00:00`;
+      const endOfDay = `${selectedDate}T23:59:59`;
 
-        const { data, error } = await supabase
-          .from('agendamentos')
-          .select('id, barbeiro_id, data_hora, servicos(duracao_minutos)')
-          .neq('status', 'cancelado')
-          .gte('data_hora', startOfDay)
-          .lte('data_hora', endOfDay);
+      const { data, error } = await supabase
+        .from('agendamentos')
+        .select('id, barbeiro_id, data_hora, servicos(duracao_minutos)')
+        .neq('status', 'cancelado')
+        .gte('data_hora', startOfDay)
+        .lte('data_hora', endOfDay);
 
-        if (error) throw error;
+      if (error) throw error;
 
-        if (data) {
-          const parsed: ExistingAppointment[] = data.map((item: any) => {
-            // Extrai a hora e minuto exatos do ISO (ex: "2026-07-24T11:00:00" -> "11:00")
-            const timePart = item.data_hora.includes('T') ? item.data_hora.split('T')[1] : item.data_hora;
-            const [hStr, mStr] = timePart.split(':');
-            const hours = parseInt(hStr, 10);
-            const minutes = parseInt(mStr, 10);
-            const startMinutes = hours * 60 + minutes;
-            
-            // Pega a duração do serviço (ex: 50 minutos)
-            const duration = item.servicos?.duracao_minutos || 30;
-            const endMinutes = startMinutes + duration;
+      if (data) {
+        const parsed: ExistingAppointment[] = data.map((item: any) => {
+          const timePart = item.data_hora.includes('T') ? item.data_hora.split('T')[1] : item.data_hora;
+          const [hStr, mStr] = timePart.split(':');
+          const hours = parseInt(hStr, 10);
+          const minutes = parseInt(mStr, 10);
+          const startMinutes = hours * 60 + minutes;
+          const duration = item.servicos?.duracao_minutos || 30;
+          const endMinutes = startMinutes + duration;
 
-            return {
-              id: item.id,
-              barbeiro_id: item.barbeiro_id,
-              startMinutes,
-              endMinutes
-            };
-          });
+          return {
+            id: item.id,
+            barbeiro_id: item.barbeiro_id,
+            startMinutes,
+            endMinutes
+          };
+        });
 
-          setExistingAppointments(parsed);
-        }
-      } catch (err) {
-        console.error('Erro ao buscar agendamentos:', err);
+        setExistingAppointments(parsed);
       }
+    } catch (err) {
+      console.error('Erro ao buscar agendamentos:', err);
     }
-    fetchDayAppointments();
   }, [selectedDate]);
+
+  // Recarrega os agendamentos sempre que mudar a data, o passo (wizard) ou o barbeiro
+  useEffect(() => {
+    fetchDayAppointments();
+  }, [fetchDayAppointments, step, selectedBarbeiro]);
 
   // Gera os próximos 7 dias no fuso horário local
   const datesList = useMemo(() => {
@@ -253,6 +252,9 @@ export default function Home() {
       ]);
 
       if (error) throw error;
+
+      // Recarrega agendamentos do dia imediatamente
+      await fetchDayAppointments();
 
       setCompleted(true);
 
