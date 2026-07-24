@@ -478,7 +478,7 @@ export default function AdminPage() {
               <label className="text-xs font-semibold text-zinc-400">PIN de Segurança (Padrão: 1234)</label>
               <input
                 type="password"
-                maxLength={8}
+                maxLength={16}
                 required
                 autoFocus
                 placeholder="****"
