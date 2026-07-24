@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { NotificationToast, CustomConfirmModal, ToastData } from '@/components/NotificationToast';
 
-const WHATSAPP_BARBEARIA = '5562999999999'; // DDD 62 de Goiânia
+const WHATSAPP_BARBEARIA = process.env.NEXT_PUBLIC_WHATSAPP_BARBEARIA || '5562999999999';
 
 interface ExistingAppointment {
   id: string;

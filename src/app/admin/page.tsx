@@ -47,6 +47,37 @@ export default function AdminPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
 
+  // Autenticação por PIN
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [pinInput, setPinInput] = useState<string>('');
+  const [pinError, setPinError] = useState<string>('');
+
+  const ADMIN_PIN = process.env.NEXT_PUBLIC_ADMIN_PIN || '1234';
+
+  useEffect(() => {
+    const authStatus = sessionStorage.getItem('barbearia_admin_auth');
+    if (authStatus === 'true') {
+      setIsAuthenticated(true);
+    }
+  }, []);
+
+  const handleLoginPin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (pinInput === ADMIN_PIN) {
+      sessionStorage.setItem('barbearia_admin_auth', 'true');
+      setIsAuthenticated(true);
+      setPinError('');
+    } else {
+      setPinError('PIN incorreto. Tente novamente.');
+    }
+  };
+
+  const handleLogout = () => {
+    sessionStorage.removeItem('barbearia_admin_auth');
+    setIsAuthenticated(false);
+    setPinInput('');
+  };
+
   // Filtros
   const [filterBarbeiro, setFilterBarbeiro] = useState<string>('todos');
   const [filterStatus, setFilterStatus] = useState<string>('todos');
@@ -373,6 +404,57 @@ export default function AdminPage() {
     }
   };
 
+  if (!isAuthenticated) {
+    return (
+      <main className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-4">
+        <div className="w-full max-w-sm bg-zinc-900 border border-zinc-800 rounded-3xl p-6 text-center space-y-6 shadow-2xl shadow-amber-500/10">
+          <div className="w-16 h-16 bg-amber-500/10 border border-amber-500/30 text-amber-500 rounded-2xl flex items-center justify-center mx-auto">
+            <Scissors size={32} />
+          </div>
+
+          <div>
+            <h2 className="text-xl font-bold text-zinc-100 flex items-center justify-center gap-2">
+              Painel Administrativo
+              <Sparkles size={16} className="text-amber-400 fill-amber-400" />
+            </h2>
+            <p className="text-zinc-400 text-xs mt-1">Digite o PIN de acesso para continuar</p>
+          </div>
+
+          <form onSubmit={handleLoginPin} className="space-y-4">
+            <div className="space-y-1 text-left">
+              <label className="text-xs font-semibold text-zinc-400">PIN de Segurança (Padrão: 1234)</label>
+              <input
+                type="password"
+                maxLength={8}
+                required
+                autoFocus
+                placeholder="****"
+                value={pinInput}
+                onChange={(e) => setPinInput(e.target.value)}
+                className="w-full bg-zinc-950 border border-zinc-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 rounded-xl py-3 px-4 text-center text-xl font-extrabold text-amber-400 tracking-widest outline-none transition"
+              />
+            </div>
+
+            {pinError && (
+              <p className="text-rose-400 text-xs font-medium text-center animate-in fade-in">{pinError}</p>
+            )}
+
+            <button
+              type="submit"
+              className="w-full py-3.5 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold rounded-xl transition shadow-lg shadow-amber-500/20 text-sm"
+            >
+              Entrar no Painel
+            </button>
+          </form>
+
+          <a href="/" className="inline-block text-xs text-zinc-500 hover:text-zinc-300 transition">
+            &larr; Voltar para a página do cliente
+          </a>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100 pb-16">
       {/* Header Fixo do Painel */}
@@ -396,7 +478,7 @@ export default function AdminPage() {
               href="/"
               className="px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition"
             >
-              <Home size={15} /> Ver Site do Cliente
+              <Home size={15} /> Ver Site
             </a>
             <button
               onClick={() => fetchAgendamentos()}
@@ -404,6 +486,13 @@ export default function AdminPage() {
               title="Atualizar dados"
             >
               <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+            </button>
+            <button
+              onClick={handleLogout}
+              className="px-3 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-semibold rounded-xl transition"
+              title="Bloquear Painel"
+            >
+              Sair
             </button>
           </div>
         </div>
