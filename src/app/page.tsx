@@ -30,6 +30,16 @@ interface ExistingAppointment {
   endMinutes: number;
 }
 
+interface MyBookingItem {
+  id: string;
+  data_hora: string;
+  cliente_nome: string;
+  cliente_telefone: string;
+  status: string;
+  barbeiros?: { nome: string };
+  servicos?: { nome: string; preco: number; duracao_minutos: number };
+}
+
 export default function Home() {
   const [step, setStep] = useState<number>(1);
   const [servicos, setServicos] = useState<Servico[]>([]);
@@ -49,6 +59,116 @@ export default function Home() {
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [completed, setCompleted] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
+
+  // Estado dos agendamentos do cliente no aparelho (Zero-Friction Client Portal)
+  const [myBookings, setMyBookings] = useState<MyBookingItem[]>([]);
+  const [showMyBookingsModal, setShowMyBookingsModal] = useState<boolean>(false);
+  const [searchPhoneInput, setSearchPhoneInput] = useState<string>('');
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+
+  // Busca agendamentos do aparelho do cliente
+  const loadMyBookings = useCallback(async () => {
+    try {
+      const storedIds = JSON.parse(localStorage.getItem('barbearia_meus_ids') || '[]');
+      if (!storedIds || storedIds.length === 0) return;
+
+      const { data } = await supabase
+        .from('agendamentos')
+        .select('id, data_hora, cliente_nome, cliente_telefone, status, barbeiros(nome), servicos(nome, preco, duracao_minutos)')
+        .in('id', storedIds)
+        .neq('status', 'cancelado')
+        .order('data_hora', { ascending: true });
+
+      if (data) {
+        setMyBookings(data as unknown as MyBookingItem[]);
+      }
+    } catch (err) {
+      console.error('Erro ao carregar meus agendamentos:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMyBookings();
+  }, [loadMyBookings]);
+
+  // Busca agendamentos digitando número de WhatsApp (caso tenha trocado de aparelho)
+  const handleSearchByPhone = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchPhoneInput.trim()) return;
+
+    const cleanPhone = searchPhoneInput.replace(/\D/g, '');
+    try {
+      const { data, error } = await supabase
+        .from('agendamentos')
+        .select('id, data_hora, cliente_nome, cliente_telefone, status, barbeiros(nome), servicos(nome, preco, duracao_minutos)')
+        .ilike('cliente_telefone', `%${cleanPhone}%`)
+        .neq('status', 'cancelado')
+        .order('data_hora', { ascending: true });
+
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        setMyBookings(data as unknown as MyBookingItem[]);
+        const newIds = data.map((d: any) => d.id);
+        localStorage.setItem('barbearia_meus_ids', JSON.stringify(newIds));
+      } else {
+        alert('Nenhum agendamento ativo foi encontrado para este número de WhatsApp.');
+      }
+    } catch (err) {
+      console.error('Erro na busca por telefone:', err);
+    }
+  };
+
+  // Cancelamento feito pelo cliente no celular (Respeitando regra dos 30 min)
+  const handleClientCancelBooking = async (item: MyBookingItem) => {
+    const timePart = item.data_hora.includes('T') ? item.data_hora.split('T')[1] : item.data_hora;
+    const datePart = item.data_hora.includes('T') ? item.data_hora.split('T')[0] : selectedDate;
+    
+    const [year, month, day] = datePart.split('-').map(Number);
+    const [hours, minutes] = timePart.substring(0, 5).split(':').map(Number);
+
+    const appointmentTime = new Date(year, month - 1, day, hours, minutes);
+    const now = new Date();
+    const diffMs = appointmentTime.getTime() - now.getTime();
+    const diffMinutes = Math.floor(diffMs / (1000 * 60));
+
+    if (diffMinutes < 30) {
+      alert('⚠️ Não é possível cancelar agendamentos com menos de 30 minutos de antecedência pelo site. Por favor, entre em contato direto com a barbearia pelo WhatsApp.');
+      return;
+    }
+
+    if (!confirm(`Tem certeza que deseja cancelar seu agendamento de ${item.servicos?.nome}?`)) {
+      return;
+    }
+
+    setCancellingId(item.id);
+    try {
+      const { error } = await supabase
+        .from('agendamentos')
+        .update({ status: 'cancelado' })
+        .eq('id', item.id);
+
+      if (error) throw error;
+
+      setMyBookings((prev) => prev.filter((b) => b.id !== item.id));
+
+      const dateFormatted = `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
+      const msg = encodeURIComponent(
+        `⚠️ *NOTIFICAÇÃO DE CANCELAMENTO PELO CLIENTE*\n\n` +
+        `Olá! Sou *${item.cliente_nome}* (Tel: ${item.cliente_telefone}).\n` +
+        `Cancelei meu agendamento de *${item.servicos?.nome}* com o barbeiro *${item.barbeiros?.nome}* marcado para *${dateFormatted} às ${timePart.substring(0, 5)}*.\n\n` +
+        `A vaga foi liberada no sistema!`
+      );
+
+      alert('Seu agendamento foi cancelado com sucesso. A vaga foi liberada no sistema!');
+      window.open(`https://wa.me/${WHATSAPP_BARBEARIA}?text=${msg}`, '_blank');
+    } catch (err) {
+      console.error('Erro ao cancelar agendamento:', err);
+      alert('Ocorreu um erro ao cancelar o agendamento. Tente novamente.');
+    } finally {
+      setCancellingId(null);
+    }
+  };
 
   // 1. Carrega serviços e barbeiros do Supabase
   useEffect(() => {
@@ -240,7 +360,7 @@ export default function Home() {
       // Formata data e hora ISO
       const dataHoraISO = `${selectedDate}T${selectedTime}:00`;
 
-      const { error } = await supabase.from('agendamentos').insert([
+      const { data: insertedData, error } = await supabase.from('agendamentos').insert([
         {
           barbeiro_id: assignedBarber.id,
           servico_id: selectedServico.id,
@@ -249,12 +369,24 @@ export default function Home() {
           data_hora: dataHoraISO,
           status: 'pendente'
         }
-      ]);
+      ]).select();
 
       if (error) throw error;
 
-      // Recarrega agendamentos do dia imediatamente
+      // Salva ID no dispositivo do cliente
+      if (insertedData && insertedData.length > 0) {
+        try {
+          const storedIds = JSON.parse(localStorage.getItem('barbearia_meus_ids') || '[]');
+          storedIds.push(insertedData[0].id);
+          localStorage.setItem('barbearia_meus_ids', JSON.stringify(storedIds));
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      // Recarrega agendamentos do dia e meus agendamentos
       await fetchDayAppointments();
+      await loadMyBookings();
 
       setCompleted(true);
 
@@ -374,9 +506,16 @@ export default function Home() {
               </p>
             </div>
           </div>
-          <span className="text-xs font-semibold px-2.5 py-1 bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-full">
-            Rápido & Fácil
-          </span>
+          <button
+            onClick={() => setShowMyBookingsModal(true)}
+            className="relative px-3 py-1.5 bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 text-amber-400 font-semibold rounded-xl text-xs flex items-center gap-1.5 transition"
+          >
+            <CalendarIcon size={14} />
+            <span>Meus Agendamentos</span>
+            {myBookings.length > 0 && (
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping absolute -top-0.5 -right-0.5" />
+            )}
+          </button>
         </div>
       </header>
 
@@ -786,6 +925,99 @@ export default function Home() {
       <footer className="w-full text-center py-4 text-xs text-zinc-600 mt-8 border-t border-zinc-900">
         Barbearia VIP &copy; {new Date().getFullYear()} &bull; Todos os direitos reservados
       </footer>
+
+      {/* Modal de Meus Agendamentos & Busca por Telefone */}
+      {showMyBookingsModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-3xl p-6 space-y-5 relative max-h-[90vh] overflow-y-auto shadow-2xl">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <h3 className="font-bold text-lg text-zinc-100 flex items-center gap-2">
+                <CalendarIcon className="text-amber-500" size={20} />
+                Meus Agendamentos
+              </h3>
+              <button
+                onClick={() => setShowMyBookingsModal(false)}
+                className="text-zinc-400 hover:text-zinc-100 text-xl font-bold p-1"
+              >
+                &times;
+              </button>
+            </div>
+
+            {/* Busca por Telefone (Mini Login) */}
+            <form onSubmit={handleSearchByPhone} className="space-y-2 bg-zinc-950/60 p-3.5 border border-zinc-800/80 rounded-2xl">
+              <label className="text-xs text-zinc-400 font-medium block">Trocou de celular? Busque seu WhatsApp:</label>
+              <div className="flex gap-2">
+                <input
+                  type="tel"
+                  placeholder="(62) 99999-9999"
+                  value={searchPhoneInput}
+                  onChange={(e) => setSearchPhoneInput(e.target.value)}
+                  className="flex-1 bg-zinc-900 border border-zinc-800 text-zinc-200 text-xs rounded-xl px-3 py-2.5 outline-none focus:border-amber-500"
+                />
+                <button
+                  type="submit"
+                  className="px-4 py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-xl hover:bg-amber-400 transition"
+                >
+                  Buscar
+                </button>
+              </div>
+            </form>
+
+            {/* Lista de Agendamentos Ativos do Cliente */}
+            <div className="space-y-3 pt-1">
+              {myBookings.length === 0 ? (
+                <div className="py-8 text-center text-zinc-500 text-sm space-y-1">
+                  <p className="font-medium">Nenhum agendamento ativo cadastrado neste celular.</p>
+                  <p className="text-xs text-zinc-600">Ao agendar, sua reserva ficará salva aqui automaticamente!</p>
+                </div>
+              ) : (
+                myBookings.map((item) => {
+                  const datePart = item.data_hora.includes('T') ? item.data_hora.split('T')[0] : '';
+                  const timePart = item.data_hora.includes('T') ? item.data_hora.split('T')[1] : item.data_hora;
+                  const dateFormatted = datePart.split('-').reverse().join('/');
+                  const timeStr = timePart.substring(0, 5);
+
+                  return (
+                    <div
+                      key={item.id}
+                      className="bg-zinc-950 border border-zinc-800/90 rounded-2xl p-4 space-y-3 shadow-md"
+                    >
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <h4 className="font-bold text-amber-400 text-base">{item.servicos?.nome}</h4>
+                          <p className="text-xs text-zinc-400">Barbeiro: <strong>{item.barbeiros?.nome || 'Profissional'}</strong></p>
+                        </div>
+                        <span className="text-xs font-bold text-zinc-200 bg-zinc-800 px-3 py-1 rounded-full border border-zinc-700">
+                          {timeStr}
+                        </span>
+                      </div>
+
+                      <div className="flex justify-between items-center text-xs text-zinc-400 border-t border-zinc-900 pt-2">
+                        <span>📅 {dateFormatted}</span>
+                        <span className="font-bold text-amber-400 text-sm">R$ {Number(item.servicos?.preco || 0).toFixed(2).replace('.', ',')}</span>
+                      </div>
+
+                      <button
+                        disabled={cancellingId === item.id}
+                        onClick={() => handleClientCancelBooking(item)}
+                        className="w-full py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-semibold rounded-xl text-xs transition flex items-center justify-center gap-1.5"
+                      >
+                        {cancellingId === item.id ? (
+                          <>
+                            <Loader2 size={14} className="animate-spin" /> Cancelando...
+                          </>
+                        ) : (
+                          <>Cancelar Agendamento</>
+                        )}
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
