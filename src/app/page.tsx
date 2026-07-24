@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Barbeiro, Servico } from '@/types/database';
 import { 
@@ -16,12 +16,19 @@ import {
   Check, 
   Loader2,
   MapPin,
-  Star,
   Award,
-  MessageCircle
+  MessageCircle,
+  AlertCircle
 } from 'lucide-react';
 
 const WHATSAPP_BARBEARIA = '5562999999999'; // DDD 62 de Goiânia
+
+interface ExistingAppointment {
+  id: string;
+  barbeiro_id: string;
+  startMinutes: number;
+  endMinutes: number;
+}
 
 export default function Home() {
   const [step, setStep] = useState<number>(1);
@@ -37,12 +44,13 @@ export default function Home() {
   const [clienteNome, setClienteNome] = useState<string>('');
   const [clienteTelefone, setClienteTelefone] = useState<string>('');
 
-  // Agendamentos ocupados para filtrar horários
-  const [bookedTimes, setBookedTimes] = useState<string[]>([]);
+  // Agendamentos ocupados no dia
+  const [existingAppointments, setExistingAppointments] = useState<ExistingAppointment[]>([]);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [completed, setCompleted] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string>('');
 
-  // Carrega serviços e barbeiros do Supabase
+  // 1. Carrega serviços e barbeiros do Supabase
   useEffect(() => {
     async function fetchData() {
       setLoadingData(true);
@@ -62,144 +70,221 @@ export default function Home() {
     }
     fetchData();
 
-    // Define a data inicial como hoje
-    const todayStr = new Date().toISOString().split('T')[0];
-    setSelectedDate(todayStr);
+    // Data padrão: Hoje no formato YYYY-MM-DD local
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    setSelectedDate(`${year}-${month}-${day}`);
   }, []);
 
-  // Carrega horários já ocupados quando a data ou barbeiro muda
+  // 2. Busca agendamentos do dia com a duração dos serviços para calcular conflitos
   useEffect(() => {
-    async function fetchBookedTimes() {
+    async function fetchDayAppointments() {
       if (!selectedDate) return;
       try {
-        let query = supabase
+        // Intervalo do dia local
+        const startOfDay = `${selectedDate}T00:00:00`;
+        const endOfDay = `${selectedDate}T23:59:59`;
+
+        const { data, error } = await supabase
           .from('agendamentos')
-          .select('data_hora')
-          .neq('status', 'cancelado');
+          .select('id, barbeiro_id, data_hora, servicos(duracao_minutos)')
+          .neq('status', 'cancelado')
+          .gte('data_hora', startOfDay)
+          .lte('data_hora', endOfDay);
 
-        // Filtra por data (início e fim do dia)
-        const startOfDay = `${selectedDate}T00:00:00Z`;
-        const endOfDay = `${selectedDate}T23:59:59Z`;
-        query = query.gte('data_hora', startOfDay).lte('data_hora', endOfDay);
+        if (error) throw error;
 
-        if (selectedBarbeiro && selectedBarbeiro !== 'qualquer') {
-          query = query.eq('barbeiro_id', selectedBarbeiro.id);
-        }
-
-        const { data } = await query;
         if (data) {
-          const times = data.map((item) => {
+          const parsed: ExistingAppointment[] = data.map((item: any) => {
             const d = new Date(item.data_hora);
-            return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+            const startMinutes = d.getHours() * 60 + d.getMinutes();
+            // Pega a duração do serviço ou 30 min como fallback
+            const duration = item.servicos?.duracao_minutos || 30;
+            const endMinutes = startMinutes + duration;
+
+            return {
+              id: item.id,
+              barbeiro_id: item.barbeiro_id,
+              startMinutes,
+              endMinutes
+            };
           });
-          setBookedTimes(times);
+
+          setExistingAppointments(parsed);
         }
       } catch (err) {
-        console.error('Erro ao buscar horários ocupados:', err);
+        console.error('Erro ao buscar agendamentos:', err);
       }
     }
-    fetchBookedTimes();
-  }, [selectedDate, selectedBarbeiro]);
+    fetchDayAppointments();
+  }, [selectedDate]);
 
-  // Gera lista dos próximos 7 dias
-  const generateDates = () => {
+  // Gera os próximos 7 dias no fuso horário local
+  const datesList = useMemo(() => {
     const dates = [];
     const today = new Date();
     for (let i = 0; i < 7; i++) {
       const d = new Date(today);
       d.setDate(today.getDate() + i);
-      const iso = d.toISOString().split('T')[0];
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const dayNum = String(d.getDate()).padStart(2, '0');
+      const iso = `${year}-${month}-${dayNum}`;
+
       const dayName = i === 0 ? 'Hoje' : d.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '');
-      const dayNum = d.getDate();
       const monthName = d.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
-      dates.push({ iso, dayName, dayNum, monthName });
+
+      dates.push({ iso, dayName, dayNum: d.getDate(), monthName });
     }
     return dates;
-  };
+  }, []);
 
-  // Gera horários das 09:00 às 19:00 (intervalos de 30 min)
-  const generateTimeSlots = () => {
+  // Slots das 09:00 às 19:00 (intervalos de 30 min)
+  const timeSlots = useMemo(() => {
     const slots = [];
-    const startHour = 9;
-    const endHour = 19;
-    for (let h = startHour; h < endHour; h++) {
+    for (let h = 9; h < 19; h++) {
       for (let m of [0, 30]) {
-        const timeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-        slots.push(timeStr);
+        slots.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
       }
     }
     return slots;
+  }, []);
+
+  // Converte "HH:MM" para minutos a partir da meia-noite
+  const timeToMinutes = (timeStr: string) => {
+    const [h, m] = timeStr.split(':').map(Number);
+    return h * 60 + m;
   };
 
-  // Envio final do agendamento
+  // Verifica se um barbeiro específico está ocupado em um intervalo de tempo [start, end)
+  const isBarberBusy = (barberId: string, slotStart: number, slotEnd: number) => {
+    return existingAppointments.some((app) => {
+      if (app.barbeiro_id !== barberId) return false;
+      // Há sobreposição se max(start1, start2) < min(end1, end2)
+      return Math.max(slotStart, app.startMinutes) < Math.min(slotEnd, app.endMinutes);
+    });
+  };
+
+  // Determina se um horário está bloqueado para o serviço e barbeiro selecionados
+  const isSlotDisabled = (timeStr: string) => {
+    if (!selectedServico) return false;
+
+    const slotStart = timeToMinutes(timeStr);
+    const serviceDuration = selectedServico.duracao_minutos || 30;
+    const slotEnd = slotStart + serviceDuration;
+
+    // Se o serviço ultrapassa o horário de funcionamento da barbearia (19:00 = 1140 min)
+    if (slotEnd > 1140) return true;
+
+    // Se o cliente escolheu um barbeiro específico
+    if (selectedBarbeiro && selectedBarbeiro !== 'qualquer') {
+      return isBarberBusy(selectedBarbeiro.id, slotStart, slotEnd);
+    }
+
+    // Se escolheu "Qualquer Barbeiro": o horário só estará bloqueado se TODOS os barbeiros ativos estiverem ocupados
+    if (barbeiros.length === 0) return true;
+    const allBarbersBusy = barbeiros.every((barber) => isBarberBusy(barber.id, slotStart, slotEnd));
+    return allBarbersBusy;
+  };
+
+  // Encontra um barbeiro disponível para o horário e serviço selecionados
+  const getAvailableBarberForSlot = (timeStr: string): Barbeiro | null => {
+    if (selectedBarbeiro && selectedBarbeiro !== 'qualquer') {
+      return selectedBarbeiro;
+    }
+
+    const slotStart = timeToMinutes(timeStr);
+    const serviceDuration = selectedServico?.duracao_minutos || 30;
+    const slotEnd = slotStart + serviceDuration;
+
+    // Encontra o primeiro barbeiro livre no horário
+    const freeBarber = barbeiros.find((barber) => !isBarberBusy(barber.id, slotStart, slotEnd));
+    return freeBarber || null;
+  };
+
+  // Submissão do formulário de agendamento
   const handleConfirmAgendamento = async (e: React.FormEvent) => {
     e.preventDefault();
+    setErrorMessage('');
+
     if (!selectedServico || !selectedBarbeiro || !selectedDate || !selectedTime || !clienteNome || !clienteTelefone) {
-      alert('Por favor, preencha todos os campos.');
+      setErrorMessage('Por favor, preencha todos os campos obrigatórios.');
+      return;
+    }
+
+    // Determina o barbeiro final
+    const assignedBarber = getAvailableBarberForSlot(selectedTime);
+    if (!assignedBarber) {
+      setErrorMessage('Desculpe, o barbeiro selecionado não está mais disponível neste horário. Escolha outro horário.');
       return;
     }
 
     setSubmitting(true);
 
     try {
-      // Resolve ID do barbeiro (se "qualquer", seleciona o primeiro disponível)
-      const barbeiroId = selectedBarbeiro === 'qualquer' 
-        ? (barbeiros[0]?.id || null) 
-        : selectedBarbeiro.id;
+      // Re-validação anti-conflito no servidor antes de inserir
+      const slotStart = timeToMinutes(selectedTime);
+      const serviceDuration = selectedServico.duracao_minutos || 30;
+      const slotEnd = slotStart + serviceDuration;
 
-      if (!barbeiroId) throw new Error('Nenhum barbeiro disponível.');
+      if (isBarberBusy(assignedBarber.id, slotStart, slotEnd)) {
+        throw new Error('Este horário já foi preenchido por outro cliente. Por favor, escolha outro horário.');
+      }
 
-      const dataHoraISO = `${selectedDate}T${selectedTime}:00Z`;
+      // Formata data e hora ISO
+      const dataHoraISO = `${selectedDate}T${selectedTime}:00`;
 
-      const { data, error } = await supabase.from('agendamentos').insert([
+      const { error } = await supabase.from('agendamentos').insert([
         {
-          barbeiro_id: barbeiroId,
+          barbeiro_id: assignedBarber.id,
           servico_id: selectedServico.id,
           cliente_nome: clienteNome.trim(),
           cliente_telefone: clienteTelefone.trim(),
           data_hora: dataHoraISO,
           status: 'pendente'
         }
-      ]).select().single();
+      ]);
 
       if (error) throw error;
 
       setCompleted(true);
 
-      // Formata data e mensagem do WhatsApp
-      const barbeiroNome = selectedBarbeiro === 'qualquer' ? 'Qualquer Barbeiro' : selectedBarbeiro.nome;
-      const dataFormatada = new Date(`${selectedDate}T12:00:00`).toLocaleDateString('pt-BR', {
-        weekday: 'short',
-        day: '2-digit',
-        month: '2-digit'
-      });
+      // Prepara mensagem formatada do WhatsApp
+      const dataParts = selectedDate.split('-');
+      const dataFormatada = `${dataParts[2]}/${dataParts[1]}/${dataParts[0]}`;
 
       const mensagemWhatsApp = encodeURIComponent(
         `Olá! Fiz um agendamento pelo site online:\n\n` +
-        `✂️ *Serviço:* ${selectedServico.nome} (R$ ${selectedServico.preco})\n` +
-        `💈 *Barbeiro:* ${barbeiroNome}\n` +
-        `📅 *Data/Hora:* ${dataFormatada} às ${selectedTime}\n` +
+        `✂️ *Serviço:* ${selectedServico.nome} (${selectedServico.duracao_minutos} min - R$ ${Number(selectedServico.preco).toFixed(2)})\n` +
+        `💈 *Barbeiro:* ${assignedBarber.nome}\n` +
+        `📅 *Data:* ${dataFormatada}\n` +
+        `⏰ *Horário:* ${selectedTime}\n` +
         `👤 *Cliente:* ${clienteNome.trim()}\n` +
         `📱 *Contato:* ${clienteTelefone.trim()}\n\n` +
         `Aguardando confirmação!`
       );
 
       const urlWhatsApp = `https://wa.me/${WHATSAPP_BARBEARIA}?text=${mensagemWhatsApp}`;
-      
-      // Abre o WhatsApp após breve delay
+
       setTimeout(() => {
         window.open(urlWhatsApp, '_blank');
-      }, 1000);
+      }, 600);
 
     } catch (err: any) {
       console.error('Erro ao salvar agendamento:', err);
-      alert('Ocorreu um erro ao salvar seu agendamento. Tente novamente.');
+      setErrorMessage(err.message || 'Ocorreu um erro ao salvar seu agendamento. Tente novamente.');
     } finally {
       setSubmitting(false);
     }
   };
 
   if (completed) {
+    const assignedBarberName = selectedBarbeiro === 'qualquer' 
+      ? getAvailableBarberForSlot(selectedTime)?.nome || 'Profissional da Casa' 
+      : selectedBarbeiro?.nome;
+
     return (
       <main className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col items-center justify-center p-4">
         <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-3xl p-6 text-center space-y-6 shadow-2xl shadow-amber-500/10">
@@ -216,21 +301,19 @@ export default function Home() {
           <div className="bg-zinc-950/80 border border-zinc-800/80 rounded-2xl p-4 text-left space-y-3">
             <div className="flex justify-between items-center text-sm border-b border-zinc-800 pb-2">
               <span className="text-zinc-400">Serviço</span>
-              <span className="font-semibold text-amber-400">{selectedServico?.nome}</span>
+              <span className="font-semibold text-amber-400">{selectedServico?.nome} ({selectedServico?.duracao_minutos} min)</span>
             </div>
             <div className="flex justify-between items-center text-sm border-b border-zinc-800 pb-2">
               <span className="text-zinc-400">Barbeiro</span>
-              <span className="font-medium text-zinc-200">
-                {selectedBarbeiro === 'qualquer' ? 'Qualquer Barbeiro' : selectedBarbeiro?.nome}
-              </span>
+              <span className="font-medium text-zinc-200">{assignedBarberName}</span>
             </div>
             <div className="flex justify-between items-center text-sm border-b border-zinc-800 pb-2">
               <span className="text-zinc-400">Data & Hora</span>
-              <span className="font-medium text-zinc-200">{selectedDate} às {selectedTime}</span>
+              <span className="font-medium text-zinc-200">{selectedDate.split('-').reverse().join('/')} às {selectedTime}</span>
             </div>
             <div className="flex justify-between items-center text-sm">
               <span className="text-zinc-400">Valor</span>
-              <span className="font-bold text-amber-400">R$ {selectedServico?.preco}</span>
+              <span className="font-bold text-amber-400">R$ {Number(selectedServico?.preco).toFixed(2).replace('.', ',')}</span>
             </div>
           </div>
 
@@ -253,6 +336,7 @@ export default function Home() {
                 setSelectedTime('');
                 setClienteNome('');
                 setClienteTelefone('');
+                setErrorMessage('');
               }}
               className="w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium rounded-xl transition text-sm"
             >
@@ -292,7 +376,7 @@ export default function Home() {
       {/* Container Principal */}
       <div className="w-full max-w-md px-4 pt-6 space-y-6">
         
-        {/* Wizard Steps Indicator */}
+        {/* Passos do Wizard */}
         <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-3.5 flex items-center justify-between">
           {[
             { num: 1, label: 'Serviço', icon: Scissors },
@@ -308,11 +392,7 @@ export default function Home() {
                 key={item.num}
                 onClick={() => isDone && setStep(item.num)}
                 className={`flex flex-col items-center gap-1 text-xs cursor-pointer transition ${
-                  isActive
-                    ? 'text-amber-400 font-bold'
-                    : isDone
-                    ? 'text-zinc-300'
-                    : 'text-zinc-600'
+                  isActive ? 'text-amber-400 font-bold' : isDone ? 'text-zinc-300' : 'text-zinc-600'
                 }`}
               >
                 <div
@@ -332,7 +412,14 @@ export default function Home() {
           })}
         </div>
 
-        {/* Loading Spinner */}
+        {/* Alerta de Erro */}
+        {errorMessage && (
+          <div className="p-3.5 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-400 text-xs flex items-center gap-2 animate-in fade-in">
+            <AlertCircle size={18} className="flex-shrink-0" />
+            <span>{errorMessage}</span>
+          </div>
+        )}
+
         {loadingData ? (
           <div className="py-20 flex flex-col items-center justify-center space-y-3 text-zinc-400">
             <Loader2 size={32} className="animate-spin text-amber-500" />
@@ -340,9 +427,9 @@ export default function Home() {
           </div>
         ) : (
           <>
-            {/* STEP 1: Seleção de Serviço */}
+            {/* PASSO 1: Serviço */}
             {step === 1 && (
-              <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+              <div className="space-y-4 animate-in fade-in duration-300">
                 <div>
                   <h2 className="text-xl font-bold text-zinc-100 flex items-center gap-2">
                     <Scissors className="text-amber-500" size={20} />
@@ -357,7 +444,10 @@ export default function Home() {
                     return (
                       <div
                         key={servico.id}
-                        onClick={() => setSelectedServico(servico)}
+                        onClick={() => {
+                          setSelectedServico(servico);
+                          setSelectedTime(''); // Limpa horário ao mudar serviço
+                        }}
                         className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
                           isSelected
                             ? 'bg-gradient-to-r from-amber-500/10 to-zinc-900 border-amber-500 ring-1 ring-amber-500 shadow-lg shadow-amber-500/10'
@@ -365,9 +455,7 @@ export default function Home() {
                         }`}
                       >
                         <div className="space-y-1">
-                          <h3 className="font-semibold text-zinc-100 text-base flex items-center gap-2">
-                            {servico.nome}
-                          </h3>
+                          <h3 className="font-semibold text-zinc-100 text-base">{servico.nome}</h3>
                           <p className="text-xs text-zinc-400 flex items-center gap-1">
                             <Clock size={13} className="text-zinc-500" /> {servico.duracao_minutos} minutos
                           </p>
@@ -379,9 +467,7 @@ export default function Home() {
                           <div className="mt-1">
                             <span
                               className={`inline-block w-5 h-5 rounded-full border flex items-center justify-center ${
-                                isSelected
-                                  ? 'bg-amber-500 border-amber-500 text-zinc-950'
-                                  : 'border-zinc-700'
+                                isSelected ? 'bg-amber-500 border-amber-500 text-zinc-950' : 'border-zinc-700'
                               }`}
                             >
                               {isSelected && <Check size={12} strokeWidth={3} />}
@@ -403,9 +489,9 @@ export default function Home() {
               </div>
             )}
 
-            {/* STEP 2: Seleção do Barbeiro */}
+            {/* PASSO 2: Barbeiro */}
             {step === 2 && (
-              <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+              <div className="space-y-4 animate-in fade-in duration-300">
                 <div>
                   <h2 className="text-xl font-bold text-zinc-100 flex items-center gap-2">
                     <User className="text-amber-500" size={20} />
@@ -415,9 +501,11 @@ export default function Home() {
                 </div>
 
                 <div className="space-y-3">
-                  {/* Opção Qualquer Barbeiro */}
                   <div
-                    onClick={() => setSelectedBarbeiro('qualquer')}
+                    onClick={() => {
+                      setSelectedBarbeiro('qualquer');
+                      setSelectedTime('');
+                    }}
                     className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center gap-4 ${
                       selectedBarbeiro === 'qualquer'
                         ? 'bg-amber-500/10 border-amber-500 ring-1 ring-amber-500 shadow-lg shadow-amber-500/10'
@@ -429,26 +517,26 @@ export default function Home() {
                     </div>
                     <div className="flex-1">
                       <h3 className="font-semibold text-zinc-100 text-base">Qualquer Barbeiro</h3>
-                      <p className="text-xs text-zinc-400">O primeiro profissional disponível</p>
+                      <p className="text-xs text-zinc-400">Primeiro profissional livre no horário</p>
                     </div>
                     <div
                       className={`w-5 h-5 rounded-full border flex items-center justify-center ${
-                        selectedBarbeiro === 'qualquer'
-                          ? 'bg-amber-500 border-amber-500 text-zinc-950'
-                          : 'border-zinc-700'
+                        selectedBarbeiro === 'qualquer' ? 'bg-amber-500 border-amber-500 text-zinc-950' : 'border-zinc-700'
                       }`}
                     >
                       {selectedBarbeiro === 'qualquer' && <Check size={12} strokeWidth={3} />}
                     </div>
                   </div>
 
-                  {/* Lista de Barbeiros da Barbearia */}
                   {barbeiros.map((barbeiro) => {
                     const isSelected = typeof selectedBarbeiro === 'object' && selectedBarbeiro?.id === barbeiro.id;
                     return (
                       <div
                         key={barbeiro.id}
-                        onClick={() => setSelectedBarbeiro(barbeiro)}
+                        onClick={() => {
+                          setSelectedBarbeiro(barbeiro);
+                          setSelectedTime('');
+                        }}
                         className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center gap-4 ${
                           isSelected
                             ? 'bg-amber-500/10 border-amber-500 ring-1 ring-amber-500 shadow-lg shadow-amber-500/10'
@@ -466,14 +554,12 @@ export default function Home() {
                             <Award size={14} className="text-amber-400" />
                           </h3>
                           <p className="text-xs text-emerald-400 flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Disponível
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Ativo na Barbearia
                           </p>
                         </div>
                         <div
                           className={`w-5 h-5 rounded-full border flex items-center justify-center ${
-                            isSelected
-                              ? 'bg-amber-500 border-amber-500 text-zinc-950'
-                              : 'border-zinc-700'
+                            isSelected ? 'bg-amber-500 border-amber-500 text-zinc-950' : 'border-zinc-700'
                           }`}
                         >
                           {isSelected && <Check size={12} strokeWidth={3} />}
@@ -486,7 +572,7 @@ export default function Home() {
                 <div className="flex gap-3 pt-2">
                   <button
                     onClick={() => setStep(1)}
-                    className="py-4 px-5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 font-semibold rounded-2xl flex items-center justify-center transition"
+                    className="py-4 px-5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 font-semibold rounded-2xl transition"
                   >
                     <ChevronLeft size={20} />
                   </button>
@@ -501,27 +587,32 @@ export default function Home() {
               </div>
             )}
 
-            {/* STEP 3: Data e Horário */}
+            {/* PASSO 3: Data e Horário com Cálculo Inteligente de Duração */}
             {step === 3 && (
-              <div className="space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300">
+              <div className="space-y-5 animate-in fade-in duration-300">
                 <div>
                   <h2 className="text-xl font-bold text-zinc-100 flex items-center gap-2">
                     <CalendarIcon className="text-amber-500" size={20} />
                     Data e Horário
                   </h2>
-                  <p className="text-zinc-400 text-xs mt-1">Selecione o dia e o horário conveniente</p>
+                  <p className="text-zinc-400 text-xs mt-1">
+                    Duração prevista: <strong className="text-amber-400">{selectedServico?.duracao_minutos} minutos</strong>
+                  </p>
                 </div>
 
-                {/* Seleção de Data (Carrossel Horizontal) */}
+                {/* Seleção de Data */}
                 <div className="space-y-2">
                   <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Data</label>
                   <div className="flex gap-2.5 overflow-x-auto pb-2 scrollbar-none">
-                    {generateDates().map((item) => {
+                    {datesList.map((item) => {
                       const isSelected = selectedDate === item.iso;
                       return (
                         <button
                           key={item.iso}
-                          onClick={() => setSelectedDate(item.iso)}
+                          onClick={() => {
+                            setSelectedDate(item.iso);
+                            setSelectedTime('');
+                          }}
                           className={`flex-shrink-0 w-16 py-3 rounded-2xl border flex flex-col items-center gap-1 transition ${
                             isSelected
                               ? 'bg-amber-500 border-amber-500 text-zinc-950 font-bold shadow-lg shadow-amber-500/20'
@@ -530,30 +621,36 @@ export default function Home() {
                         >
                           <span className="text-xs uppercase font-medium">{item.dayName}</span>
                           <span className="text-lg font-bold">{item.dayNum}</span>
-                          <span className="text-[10px] opacity-80 uppercase">{item.monthName}</span>
+                          <span className="text-[10px] uppercase opacity-80">{item.monthName}</span>
                         </button>
                       );
                     })}
                   </div>
                 </div>
 
-                {/* Grid de Horários */}
+                {/* Grid de Horários Calculados sem Sobreposição */}
                 <div className="space-y-2">
-                  <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Horários Disponíveis</label>
+                  <div className="flex justify-between items-center">
+                    <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Horários Disponíveis</label>
+                    <span className="text-[11px] text-zinc-500">
+                      {selectedBarbeiro === 'qualquer' ? 'Verificando todos os barbeiros' : `Horários de ${selectedBarbeiro?.nome}`}
+                    </span>
+                  </div>
+
                   <div className="grid grid-cols-4 gap-2.5">
-                    {generateTimeSlots().map((time) => {
-                      const isBooked = bookedTimes.includes(time);
+                    {timeSlots.map((time) => {
+                      const disabled = isSlotDisabled(time);
                       const isSelected = selectedTime === time;
                       return (
                         <button
                           key={time}
-                          disabled={isBooked}
+                          disabled={disabled}
                           onClick={() => setSelectedTime(time)}
                           className={`py-3 rounded-xl border text-sm font-semibold transition ${
-                            isBooked
-                              ? 'bg-zinc-950 border-zinc-900 text-zinc-700 line-through cursor-not-allowed'
+                            disabled
+                              ? 'bg-zinc-950/80 border-zinc-900 text-zinc-700 line-through cursor-not-allowed'
                               : isSelected
-                              ? 'bg-amber-500 border-amber-500 text-zinc-950 shadow-md shadow-amber-500/20 ring-1 ring-amber-400'
+                              ? 'bg-amber-500 border-amber-500 text-zinc-950 shadow-md shadow-amber-500/20'
                               : 'bg-zinc-900 border-zinc-800 text-zinc-200 hover:border-amber-500/50'
                           }`}
                         >
@@ -567,7 +664,7 @@ export default function Home() {
                 <div className="flex gap-3 pt-2">
                   <button
                     onClick={() => setStep(2)}
-                    className="py-4 px-5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 font-semibold rounded-2xl flex items-center justify-center transition"
+                    className="py-4 px-5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 font-semibold rounded-2xl transition"
                   >
                     <ChevronLeft size={20} />
                   </button>
@@ -582,9 +679,9 @@ export default function Home() {
               </div>
             )}
 
-            {/* STEP 4: Confirmação e Dados do Cliente */}
+            {/* PASSO 4: Dados do Cliente e Confirmação */}
             {step === 4 && (
-              <form onSubmit={handleConfirmAgendamento} className="space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300">
+              <form onSubmit={handleConfirmAgendamento} className="space-y-5 animate-in fade-in duration-300">
                 <div>
                   <h2 className="text-xl font-bold text-zinc-100 flex items-center gap-2">
                     <CheckCircle2 className="text-amber-500" size={20} />
@@ -593,22 +690,23 @@ export default function Home() {
                   <p className="text-zinc-400 text-xs mt-1">Informe seu nome e WhatsApp para a confirmação</p>
                 </div>
 
-                {/* Resumo do Agendamento */}
                 <div className="bg-zinc-900/90 border border-zinc-800/80 rounded-2xl p-4 space-y-2.5">
                   <h3 className="text-xs font-semibold text-amber-400 uppercase tracking-wider mb-2">Resumo da Reserva</h3>
                   <div className="flex justify-between text-sm">
                     <span className="text-zinc-400">Serviço:</span>
-                    <span className="font-semibold text-zinc-100">{selectedServico?.nome}</span>
+                    <span className="font-semibold text-zinc-100">{selectedServico?.nome} ({selectedServico?.duracao_minutos} min)</span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-zinc-400">Barbeiro:</span>
                     <span className="font-medium text-zinc-200">
-                      {selectedBarbeiro === 'qualquer' ? 'Qualquer Barbeiro' : selectedBarbeiro?.nome}
+                      {selectedBarbeiro === 'qualquer'
+                        ? `Qualquer Barbeiro (${getAvailableBarberForSlot(selectedTime)?.nome || 'Livre'})`
+                        : selectedBarbeiro?.nome}
                     </span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-zinc-400">Data & Hora:</span>
-                    <span className="font-medium text-zinc-200">{selectedDate} às {selectedTime}</span>
+                    <span className="font-medium text-zinc-200">{selectedDate.split('-').reverse().join('/')} às {selectedTime}</span>
                   </div>
                   <div className="flex justify-between text-sm border-t border-zinc-800 pt-2 font-bold">
                     <span className="text-zinc-300">Total a pagar:</span>
@@ -616,7 +714,6 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* Campos do Formulário */}
                 <div className="space-y-4">
                   <div className="space-y-1.5">
                     <label className="text-xs font-medium text-zinc-300">Seu Nome Completo *</label>
@@ -640,7 +737,7 @@ export default function Home() {
                       <input
                         type="tel"
                         required
-                        placeholder="(11) 99999-9999"
+                        placeholder="(62) 99999-9999"
                         value={clienteTelefone}
                         onChange={(e) => setClienteTelefone(e.target.value)}
                         className="w-full bg-zinc-900 border border-zinc-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 rounded-xl py-3 pl-10 pr-4 text-sm text-zinc-100 placeholder-zinc-500 outline-none transition"
@@ -653,7 +750,7 @@ export default function Home() {
                   <button
                     type="button"
                     onClick={() => setStep(3)}
-                    className="py-4 px-5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 font-semibold rounded-2xl flex items-center justify-center transition"
+                    className="py-4 px-5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 font-semibold rounded-2xl transition"
                   >
                     <ChevronLeft size={20} />
                   </button>
@@ -679,7 +776,6 @@ export default function Home() {
         )}
       </div>
 
-      {/* Footer Fixo */}
       <footer className="w-full text-center py-4 text-xs text-zinc-600 mt-8 border-t border-zinc-900">
         Barbearia VIP &copy; {new Date().getFullYear()} &bull; Todos os direitos reservados
       </footer>
