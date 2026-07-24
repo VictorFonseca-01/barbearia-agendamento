@@ -1,0 +1,687 @@
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import { supabase } from '@/lib/supabase';
+import { Barbeiro, Servico } from '@/types/database';
+import { 
+  Scissors, 
+  User, 
+  Calendar as CalendarIcon, 
+  Clock, 
+  CheckCircle2, 
+  Phone, 
+  Sparkles, 
+  ChevronRight, 
+  ChevronLeft, 
+  Check, 
+  Loader2,
+  MapPin,
+  Star,
+  MessageCircle
+} from 'lucide-react';
+
+const WHATSAPP_BARBEARIA = '5511999999999'; // Substitua pelo número real da barbearia
+
+export default function Home() {
+  const [step, setStep] = useState<number>(1);
+  const [servicos, setServicos] = useState<Servico[]>([]);
+  const [barbeiros, setBarbeiros] = useState<Barbeiro[]>([]);
+  const [loadingData, setLoadingData] = useState<boolean>(true);
+
+  // Seleções do formulário
+  const [selectedServico, setSelectedServico] = useState<Servico | null>(null);
+  const [selectedBarbeiro, setSelectedBarbeiro] = useState<Barbeiro | 'qualquer' | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string>('');
+  const [selectedTime, setSelectedTime] = useState<string>('');
+  const [clienteNome, setClienteNome] = useState<string>('');
+  const [clienteTelefone, setClienteTelefone] = useState<string>('');
+
+  // Agendamentos ocupados para filtrar horários
+  const [bookedTimes, setBookedTimes] = useState<string[]>([]);
+  const [submitting, setSubmitting] = useState<boolean>(false);
+  const [completed, setCompleted] = useState<boolean>(false);
+
+  // Carrega serviços e barbeiros do Supabase
+  useEffect(() => {
+    async function fetchData() {
+      setLoadingData(true);
+      try {
+        const [servicosRes, barbeirosRes] = await Promise.all([
+          supabase.from('servicos').select('*').order('preco', { ascending: true }),
+          supabase.from('barbeiros').select('*').eq('ativo', true).order('nome', { ascending: true })
+        ]);
+
+        if (servicosRes.data) setServicos(servicosRes.data);
+        if (barbeirosRes.data) setBarbeiros(barbeirosRes.data);
+      } catch (err) {
+        console.error('Erro ao carregar dados:', err);
+      } finally {
+        setLoadingData(false);
+      }
+    }
+    fetchData();
+
+    // Define a data inicial como hoje
+    const todayStr = new Date().toISOString().split('T')[0];
+    setSelectedDate(todayStr);
+  }, []);
+
+  // Carrega horários já ocupados quando a data ou barbeiro muda
+  useEffect(() => {
+    async function fetchBookedTimes() {
+      if (!selectedDate) return;
+      try {
+        let query = supabase
+          .from('agendamentos')
+          .select('data_hora')
+          .neq('status', 'cancelado');
+
+        // Filtra por data (início e fim do dia)
+        const startOfDay = `${selectedDate}T00:00:00Z`;
+        const endOfDay = `${selectedDate}T23:59:59Z`;
+        query = query.gte('data_hora', startOfDay).lte('data_hora', endOfDay);
+
+        if (selectedBarbeiro && selectedBarbeiro !== 'qualquer') {
+          query = query.eq('barbeiro_id', selectedBarbeiro.id);
+        }
+
+        const { data } = await query;
+        if (data) {
+          const times = data.map((item) => {
+            const d = new Date(item.data_hora);
+            return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+          });
+          setBookedTimes(times);
+        }
+      } catch (err) {
+        console.error('Erro ao buscar horários ocupados:', err);
+      }
+    }
+    fetchBookedTimes();
+  }, [selectedDate, selectedBarbeiro]);
+
+  // Gera lista dos próximos 7 dias
+  const generateDates = () => {
+    const dates = [];
+    const today = new Date();
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(today);
+      d.setDate(today.getDate() + i);
+      const iso = d.toISOString().split('T')[0];
+      const dayName = i === 0 ? 'Hoje' : d.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '');
+      const dayNum = d.getDate();
+      const monthName = d.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
+      dates.push({ iso, dayName, dayNum, monthName });
+    }
+    return dates;
+  };
+
+  // Gera horários das 09:00 às 19:00 (intervalos de 30 min)
+  const generateTimeSlots = () => {
+    const slots = [];
+    const startHour = 9;
+    const endHour = 19;
+    for (let h = startHour; h < endHour; h++) {
+      for (let m of [0, 30]) {
+        const timeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+        slots.push(timeStr);
+      }
+    }
+    return slots;
+  };
+
+  // Envio final do agendamento
+  const handleConfirmAgendamento = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedServico || !selectedBarbeiro || !selectedDate || !selectedTime || !clienteNome || !clienteTelefone) {
+      alert('Por favor, preencha todos os campos.');
+      return;
+    }
+
+    setSubmitting(true);
+
+    try {
+      // Resolve ID do barbeiro (se "qualquer", seleciona o primeiro disponível)
+      const barbeiroId = selectedBarbeiro === 'qualquer' 
+        ? (barbeiros[0]?.id || null) 
+        : selectedBarbeiro.id;
+
+      if (!barbeiroId) throw new Error('Nenhum barbeiro disponível.');
+
+      const dataHoraISO = `${selectedDate}T${selectedTime}:00Z`;
+
+      const { data, error } = await supabase.from('agendamentos').insert([
+        {
+          barbeiro_id: barbeiroId,
+          servico_id: selectedServico.id,
+          cliente_nome: clienteNome.trim(),
+          cliente_telefone: clienteTelefone.trim(),
+          data_hora: dataHoraISO,
+          status: 'pendente'
+        }
+      ]).select().single();
+
+      if (error) throw error;
+
+      setCompleted(true);
+
+      // Formata data e mensagem do WhatsApp
+      const barbeiroNome = selectedBarbeiro === 'qualquer' ? 'Qualquer Barbeiro' : selectedBarbeiro.nome;
+      const dataFormatada = new Date(`${selectedDate}T12:00:00`).toLocaleDateString('pt-BR', {
+        weekday: 'short',
+        day: '2-digit',
+        month: '2-digit'
+      });
+
+      const mensagemWhatsApp = encodeURIComponent(
+        `Olá! Fiz um agendamento pelo site online:\n\n` +
+        `✂️ *Serviço:* ${selectedServico.nome} (R$ ${selectedServico.preco})\n` +
+        `💈 *Barbeiro:* ${barbeiroNome}\n` +
+        `📅 *Data/Hora:* ${dataFormatada} às ${selectedTime}\n` +
+        `👤 *Cliente:* ${clienteNome.trim()}\n` +
+        `📱 *Contato:* ${clienteTelefone.trim()}\n\n` +
+        `Aguardando confirmação!`
+      );
+
+      const urlWhatsApp = `https://wa.me/${WHATSAPP_BARBEARIA}?text=${mensagemWhatsApp}`;
+      
+      // Abre o WhatsApp após breve delay
+      setTimeout(() => {
+        window.open(urlWhatsApp, '_blank');
+      }, 1000);
+
+    } catch (err: any) {
+      console.error('Erro ao salvar agendamento:', err);
+      alert('Ocorreu um erro ao salvar seu agendamento. Tente novamente.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (completed) {
+    return (
+      <main className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col items-center justify-center p-4">
+        <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-3xl p-6 text-center space-y-6 shadow-2xl shadow-amber-500/10">
+          <div className="w-20 h-20 bg-amber-500/10 border border-amber-500/30 text-amber-500 rounded-full flex items-center justify-center mx-auto animate-bounce">
+            <CheckCircle2 size={44} />
+          </div>
+          <div>
+            <h2 className="text-2xl font-bold text-zinc-100">Agendamento Realizado!</h2>
+            <p className="text-zinc-400 text-sm mt-2">
+              Seu horário foi reservado com sucesso no sistema.
+            </p>
+          </div>
+
+          <div className="bg-zinc-950/80 border border-zinc-800/80 rounded-2xl p-4 text-left space-y-3">
+            <div className="flex justify-between items-center text-sm border-b border-zinc-800 pb-2">
+              <span className="text-zinc-400">Serviço</span>
+              <span className="font-semibold text-amber-400">{selectedServico?.nome}</span>
+            </div>
+            <div className="flex justify-between items-center text-sm border-b border-zinc-800 pb-2">
+              <span className="text-zinc-400">Barbeiro</span>
+              <span className="font-medium text-zinc-200">
+                {selectedBarbeiro === 'qualquer' ? 'Qualquer Barbeiro' : selectedBarbeiro?.nome}
+              </span>
+            </div>
+            <div className="flex justify-between items-center text-sm border-b border-zinc-800 pb-2">
+              <span className="text-zinc-400">Data & Hora</span>
+              <span className="font-medium text-zinc-200">{selectedDate} às {selectedTime}</span>
+            </div>
+            <div className="flex justify-between items-center text-sm">
+              <span className="text-zinc-400">Valor</span>
+              <span className="font-bold text-amber-400">R$ {selectedServico?.preco}</span>
+            </div>
+          </div>
+
+          <div className="space-y-3 pt-2">
+            <a
+              href={`https://wa.me/${WHATSAPP_BARBEARIA}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl flex items-center justify-center gap-2 transition shadow-lg shadow-emerald-600/20"
+            >
+              <MessageCircle size={20} />
+              Abrir WhatsApp da Barbearia
+            </a>
+            <button
+              onClick={() => {
+                setCompleted(false);
+                setStep(1);
+                setSelectedServico(null);
+                setSelectedBarbeiro(null);
+                setSelectedTime('');
+                setClienteNome('');
+                setClienteTelefone('');
+              }}
+              className="w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium rounded-xl transition text-sm"
+            >
+              Fazer Novo Agendamento
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col items-center justify-between pb-12">
+      {/* Header Fixo */}
+      <header className="w-full bg-zinc-900/90 backdrop-blur-md border-b border-zinc-800/80 sticky top-0 z-50">
+        <div className="max-w-md mx-auto px-4 py-3.5 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-amber-500/10 border border-amber-500/30 text-amber-500 rounded-xl flex items-center justify-center">
+              <Scissors size={22} />
+            </div>
+            <div>
+              <h1 className="font-bold text-base tracking-wide text-zinc-100 flex items-center gap-1.5">
+                BARBEARIA VIP
+                <Sparkles size={14} className="text-amber-400 fill-amber-400" />
+              </h1>
+              <p className="text-xs text-zinc-400 flex items-center gap-1">
+                <MapPin size={12} className="text-zinc-500" /> Agendamento Online
+              </p>
+            </div>
+          </div>
+          <span className="text-xs font-semibold px-2.5 py-1 bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-full">
+            Rápido & Fácil
+          </span>
+        </div>
+      </header>
+
+      {/* Container Principal */}
+      <div className="w-full max-w-md px-4 pt-6 space-y-6">
+        
+        {/* Wizard Steps Indicator */}
+        <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-3.5 flex items-center justify-between">
+          {[
+            { num: 1, label: 'Serviço', icon: Scissors },
+            { num: 2, label: 'Barbeiro', icon: User },
+            { num: 3, label: 'Horário', icon: Clock },
+            { num: 4, label: 'Confirmação', icon: CheckCircle2 },
+          ].map((item) => {
+            const Icon = item.icon;
+            const isActive = step === item.num;
+            const isDone = step > item.num;
+            return (
+              <div
+                key={item.num}
+                onClick={() => isDone && setStep(item.num)}
+                className={`flex flex-col items-center gap-1 text-xs cursor-pointer transition ${
+                  isActive
+                    ? 'text-amber-400 font-bold'
+                    : isDone
+                    ? 'text-zinc-300'
+                    : 'text-zinc-600'
+                }`}
+              >
+                <div
+                  className={`w-9 h-9 rounded-xl flex items-center justify-center transition ${
+                    isActive
+                      ? 'bg-amber-500 text-zinc-950 font-bold shadow-lg shadow-amber-500/25 ring-2 ring-amber-400/50'
+                      : isDone
+                      ? 'bg-zinc-800 text-amber-400 border border-zinc-700'
+                      : 'bg-zinc-900 border border-zinc-800 text-zinc-600'
+                  }`}
+                >
+                  {isDone ? <Check size={16} /> : <Icon size={16} />}
+                </div>
+                <span>{item.label}</span>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Loading Spinner */}
+        {loadingData ? (
+          <div className="py-20 flex flex-col items-center justify-center space-y-3 text-zinc-400">
+            <Loader2 size={32} className="animate-spin text-amber-500" />
+            <p className="text-sm">Carregando serviços da barbearia...</p>
+          </div>
+        ) : (
+          <>
+            {/* STEP 1: Seleção de Serviço */}
+            {step === 1 && (
+              <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <div>
+                  <h2 className="text-xl font-bold text-zinc-100 flex items-center gap-2">
+                    <Scissors className="text-amber-500" size={20} />
+                    Escolha o Serviço
+                  </h2>
+                  <p className="text-zinc-400 text-xs mt-1">Selecione o procedimento desejado</p>
+                </div>
+
+                <div className="space-y-3">
+                  {servicos.map((servico) => {
+                    const isSelected = selectedServico?.id === servico.id;
+                    return (
+                      <div
+                        key={servico.id}
+                        onClick={() => setSelectedServico(servico)}
+                        className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
+                          isSelected
+                            ? 'bg-gradient-to-r from-amber-500/10 to-zinc-900 border-amber-500 ring-1 ring-amber-500 shadow-lg shadow-amber-500/10'
+                            : 'bg-zinc-900/60 border-zinc-800/80 hover:border-zinc-700'
+                        }`}
+                      >
+                        <div className="space-y-1">
+                          <h3 className="font-semibold text-zinc-100 text-base flex items-center gap-2">
+                            {servico.nome}
+                          </h3>
+                          <p className="text-xs text-zinc-400 flex items-center gap-1">
+                            <Clock size={13} className="text-zinc-500" /> {servico.duracao_minutos} minutos
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-lg font-bold text-amber-400">
+                            R$ {Number(servico.preco).toFixed(2).replace('.', ',')}
+                          </span>
+                          <div className="mt-1">
+                            <span
+                              className={`inline-block w-5 h-5 rounded-full border flex items-center justify-center ${
+                                isSelected
+                                  ? 'bg-amber-500 border-amber-500 text-zinc-950'
+                                  : 'border-zinc-700'
+                              }`}
+                            >
+                              {isSelected && <Check size={12} strokeWidth={3} />}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <button
+                  disabled={!selectedServico}
+                  onClick={() => setStep(2)}
+                  className="w-full py-4 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-950 font-bold rounded-2xl flex items-center justify-center gap-2 transition shadow-xl shadow-amber-500/20 text-base"
+                >
+                  Continuar para Barbeiro <ChevronRight size={20} />
+                </button>
+              </div>
+            )}
+
+            {/* STEP 2: Seleção do Barbeiro */}
+            {step === 2 && (
+              <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <div>
+                  <h2 className="text-xl font-bold text-zinc-100 flex items-center gap-2">
+                    <User className="text-amber-500" size={20} />
+                    Escolha o Barbeiro
+                  </h2>
+                  <p className="text-zinc-400 text-xs mt-1">Selecione o profissional de sua preferência</p>
+                </div>
+
+                <div className="space-y-3">
+                  {/* Opção Qualquer Barbeiro */}
+                  <div
+                    onClick={() => setSelectedBarbeiro('qualquer')}
+                    className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center gap-4 ${
+                      selectedBarbeiro === 'qualquer'
+                        ? 'bg-amber-500/10 border-amber-500 ring-1 ring-amber-500 shadow-lg shadow-amber-500/10'
+                        : 'bg-zinc-900/60 border-zinc-800/80 hover:border-zinc-700'
+                    }`}
+                  >
+                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500 to-amber-700 text-zinc-950 font-bold flex items-center justify-center shadow-md">
+                      <Sparkles size={22} />
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-zinc-100 text-base">Qualquer Barbeiro</h3>
+                      <p className="text-xs text-zinc-400">O primeiro profissional disponível</p>
+                    </div>
+                    <div
+                      className={`w-5 h-5 rounded-full border flex items-center justify-center ${
+                        selectedBarbeiro === 'qualquer'
+                          ? 'bg-amber-500 border-amber-500 text-zinc-950'
+                          : 'border-zinc-700'
+                      }`}
+                    >
+                      {selectedBarbeiro === 'qualquer' && <Check size={12} strokeWidth={3} />}
+                    </div>
+                  </div>
+
+                  {/* Lista de Barbeiros da Barbearia */}
+                  {barbeiros.map((barbeiro) => {
+                    const isSelected = typeof selectedBarbeiro === 'object' && selectedBarbeiro?.id === barbeiro.id;
+                    return (
+                      <div
+                        key={barbeiro.id}
+                        onClick={() => setSelectedBarbeiro(barbeiro)}
+                        className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center gap-4 ${
+                          isSelected
+                            ? 'bg-amber-500/10 border-amber-500 ring-1 ring-amber-500 shadow-lg shadow-amber-500/10'
+                            : 'bg-zinc-900/60 border-zinc-800/80 hover:border-zinc-700'
+                        }`}
+                      >
+                        <img
+                          src={barbeiro.foto_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'}
+                          alt={barbeiro.nome}
+                          className="w-12 h-12 rounded-xl object-cover border border-zinc-700"
+                        />
+                        <div className="flex-1">
+                          <h3 className="font-semibold text-zinc-100 text-base flex items-center gap-1.5">
+                            {barbeiro.nome}
+                            <Award size={14} className="text-amber-400" />
+                          </h3>
+                          <p className="text-xs text-emerald-400 flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Disponível
+                          </p>
+                        </div>
+                        <div
+                          className={`w-5 h-5 rounded-full border flex items-center justify-center ${
+                            isSelected
+                              ? 'bg-amber-500 border-amber-500 text-zinc-950'
+                              : 'border-zinc-700'
+                          }`}
+                        >
+                          {isSelected && <Check size={12} strokeWidth={3} />}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    onClick={() => setStep(1)}
+                    className="py-4 px-5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 font-semibold rounded-2xl flex items-center justify-center transition"
+                  >
+                    <ChevronLeft size={20} />
+                  </button>
+                  <button
+                    disabled={!selectedBarbeiro}
+                    onClick={() => setStep(3)}
+                    className="flex-1 py-4 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-950 font-bold rounded-2xl flex items-center justify-center gap-2 transition shadow-xl shadow-amber-500/20 text-base"
+                  >
+                    Escolher Horário <ChevronRight size={20} />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* STEP 3: Data e Horário */}
+            {step === 3 && (
+              <div className="space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <div>
+                  <h2 className="text-xl font-bold text-zinc-100 flex items-center gap-2">
+                    <CalendarIcon className="text-amber-500" size={20} />
+                    Data e Horário
+                  </h2>
+                  <p className="text-zinc-400 text-xs mt-1">Selecione o dia e o horário conveniente</p>
+                </div>
+
+                {/* Seleção de Data (Carrossel Horizontal) */}
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Data</label>
+                  <div className="flex gap-2.5 overflow-x-auto pb-2 scrollbar-none">
+                    {generateDates().map((item) => {
+                      const isSelected = selectedDate === item.iso;
+                      return (
+                        <button
+                          key={item.iso}
+                          onClick={() => setSelectedDate(item.iso)}
+                          className={`flex-shrink-0 w-16 py-3 rounded-2xl border flex flex-col items-center gap-1 transition ${
+                            isSelected
+                              ? 'bg-amber-500 border-amber-500 text-zinc-950 font-bold shadow-lg shadow-amber-500/20'
+                              : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-700'
+                          }`}
+                        >
+                          <span className="text-xs uppercase font-medium">{item.dayName}</span>
+                          <span className="text-lg font-bold">{item.dayNum}</span>
+                          <span className="text-[10px] opacity-80 uppercase">{item.monthName}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Grid de Horários */}
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Horários Disponíveis</label>
+                  <div className="grid grid-cols-4 gap-2.5">
+                    {generateTimeSlots().map((time) => {
+                      const isBooked = bookedTimes.includes(time);
+                      const isSelected = selectedTime === time;
+                      return (
+                        <button
+                          key={time}
+                          disabled={isBooked}
+                          onClick={() => setSelectedTime(time)}
+                          className={`py-3 rounded-xl border text-sm font-semibold transition ${
+                            isBooked
+                              ? 'bg-zinc-950 border-zinc-900 text-zinc-700 line-through cursor-not-allowed'
+                              : isSelected
+                              ? 'bg-amber-500 border-amber-500 text-zinc-950 shadow-md shadow-amber-500/20 ring-1 ring-amber-400'
+                              : 'bg-zinc-900 border-zinc-800 text-zinc-200 hover:border-amber-500/50'
+                          }`}
+                        >
+                          {time}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    onClick={() => setStep(2)}
+                    className="py-4 px-5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 font-semibold rounded-2xl flex items-center justify-center transition"
+                  >
+                    <ChevronLeft size={20} />
+                  </button>
+                  <button
+                    disabled={!selectedDate || !selectedTime}
+                    onClick={() => setStep(4)}
+                    className="flex-1 py-4 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-950 font-bold rounded-2xl flex items-center justify-center gap-2 transition shadow-xl shadow-amber-500/20 text-base"
+                  >
+                    Preencher Seus Dados <ChevronRight size={20} />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* STEP 4: Confirmação e Dados do Cliente */}
+            {step === 4 && (
+              <form onSubmit={handleConfirmAgendamento} className="space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <div>
+                  <h2 className="text-xl font-bold text-zinc-100 flex items-center gap-2">
+                    <CheckCircle2 className="text-amber-500" size={20} />
+                    Finalizar Agendamento
+                  </h2>
+                  <p className="text-zinc-400 text-xs mt-1">Informe seu nome e WhatsApp para a confirmação</p>
+                </div>
+
+                {/* Resumo do Agendamento */}
+                <div className="bg-zinc-900/90 border border-zinc-800/80 rounded-2xl p-4 space-y-2.5">
+                  <h3 className="text-xs font-semibold text-amber-400 uppercase tracking-wider mb-2">Resumo da Reserva</h3>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-zinc-400">Serviço:</span>
+                    <span className="font-semibold text-zinc-100">{selectedServico?.nome}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-zinc-400">Barbeiro:</span>
+                    <span className="font-medium text-zinc-200">
+                      {selectedBarbeiro === 'qualquer' ? 'Qualquer Barbeiro' : selectedBarbeiro?.nome}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-zinc-400">Data & Hora:</span>
+                    <span className="font-medium text-zinc-200">{selectedDate} às {selectedTime}</span>
+                  </div>
+                  <div className="flex justify-between text-sm border-t border-zinc-800 pt-2 font-bold">
+                    <span className="text-zinc-300">Total a pagar:</span>
+                    <span className="text-amber-400 text-base">R$ {Number(selectedServico?.preco).toFixed(2).replace('.', ',')}</span>
+                  </div>
+                </div>
+
+                {/* Campos do Formulário */}
+                <div className="space-y-4">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-zinc-300">Seu Nome Completo *</label>
+                    <div className="relative">
+                      <User size={18} className="absolute left-3.5 top-3.5 text-zinc-500" />
+                      <input
+                        type="text"
+                        required
+                        placeholder="Ex: João da Silva"
+                        value={clienteNome}
+                        onChange={(e) => setClienteNome(e.target.value)}
+                        className="w-full bg-zinc-900 border border-zinc-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 rounded-xl py-3 pl-10 pr-4 text-sm text-zinc-100 placeholder-zinc-500 outline-none transition"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-zinc-300">WhatsApp (com DDD) *</label>
+                    <div className="relative">
+                      <Phone size={18} className="absolute left-3.5 top-3.5 text-zinc-500" />
+                      <input
+                        type="tel"
+                        required
+                        placeholder="(11) 99999-9999"
+                        value={clienteTelefone}
+                        onChange={(e) => setClienteTelefone(e.target.value)}
+                        className="w-full bg-zinc-900 border border-zinc-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 rounded-xl py-3 pl-10 pr-4 text-sm text-zinc-100 placeholder-zinc-500 outline-none transition"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setStep(3)}
+                    className="py-4 px-5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 font-semibold rounded-2xl flex items-center justify-center transition"
+                  >
+                    <ChevronLeft size={20} />
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={submitting || !clienteNome || !clienteTelefone}
+                    className="flex-1 py-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-2xl flex items-center justify-center gap-2 transition shadow-xl shadow-emerald-600/20 text-base"
+                  >
+                    {submitting ? (
+                      <>
+                        <Loader2 size={20} className="animate-spin" /> Salvando...
+                      </>
+                    ) : (
+                      <>
+                        <MessageCircle size={20} /> Confirmar & Enviar WhatsApp
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Footer Fixo */}
+      <footer className="w-full text-center py-4 text-xs text-zinc-600 mt-8 border-t border-zinc-900">
+        Barbearia VIP &copy; {new Date().getFullYear()} &bull; Todos os direitos reservados
+      </footer>
+    </main>
+  );
+}
