@@ -20,6 +20,7 @@ import {
   MessageCircle,
   AlertCircle
 } from 'lucide-react';
+import { NotificationToast, CustomConfirmModal, ToastData } from '@/components/NotificationToast';
 
 const WHATSAPP_BARBEARIA = '5562999999999'; // DDD 62 de Goiânia
 
@@ -66,6 +67,20 @@ export default function Home() {
   const [searchPhoneInput, setSearchPhoneInput] = useState<string>('');
   const [cancellingId, setCancellingId] = useState<string | null>(null);
 
+  // Estado de Toasts e Confirmações
+  const [toast, setToast] = useState<ToastData | null>(null);
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    item: MyBookingItem | null;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    item: null
+  });
+
   // Busca agendamentos do aparelho do cliente
   const loadMyBookings = useCallback(async () => {
     try {
@@ -111,16 +126,18 @@ export default function Home() {
         setMyBookings(data as unknown as MyBookingItem[]);
         const newIds = data.map((d: any) => d.id);
         localStorage.setItem('barbearia_meus_ids', JSON.stringify(newIds));
+        setToast({ id: Date.now().toString(), type: 'success', message: 'Agendamentos localizados com sucesso!' });
       } else {
-        alert('Nenhum agendamento ativo foi encontrado para este número de WhatsApp.');
+        setToast({ id: Date.now().toString(), type: 'warning', message: 'Nenhum agendamento ativo encontrado para este número de WhatsApp.' });
       }
     } catch (err) {
       console.error('Erro na busca por telefone:', err);
+      setToast({ id: Date.now().toString(), type: 'error', message: 'Ocorreu um erro ao buscar seus agendamentos.' });
     }
   };
 
-  // Cancelamento feito pelo cliente no celular (Respeitando regra dos 30 min)
-  const handleClientCancelBooking = async (item: MyBookingItem) => {
+  // Abre a modal customizada de confirmação de cancelamento
+  const promptClientCancelBooking = (item: MyBookingItem) => {
     const timePart = item.data_hora.includes('T') ? item.data_hora.split('T')[1] : item.data_hora;
     const datePart = item.data_hora.includes('T') ? item.data_hora.split('T')[0] : selectedDate;
     
@@ -133,16 +150,35 @@ export default function Home() {
     const diffMinutes = Math.floor(diffMs / (1000 * 60));
 
     if (diffMinutes < 30) {
-      alert('⚠️ Não é possível cancelar agendamentos com menos de 30 minutos de antecedência pelo site. Por favor, entre em contato direto com a barbearia pelo WhatsApp.');
+      setToast({
+        id: Date.now().toString(),
+        type: 'warning',
+        message: '⚠️ Cancelamentos só são permitidos com no mínimo 30 minutos de antecedência. Entre em contato direto com a barbearia pelo WhatsApp.'
+      });
       return;
     }
 
-    if (!confirm(`Tem certeza que deseja cancelar seu agendamento de ${item.servicos?.nome}?`)) {
-      return;
-    }
+    setConfirmModal({
+      isOpen: true,
+      title: 'Cancelar Agendamento',
+      message: `Tem certeza que deseja cancelar seu agendamento de "${item.servicos?.nome}"? A vaga será liberada imediatamente.`,
+      item
+    });
+  };
 
+  // Executa a confirmação do cancelamento pelo cliente
+  const executeClientCancelBooking = async () => {
+    const item = confirmModal.item;
+    if (!item) return;
+
+    setConfirmModal({ isOpen: false, title: '', message: '', item: null });
     setCancellingId(item.id);
+
     try {
+      const timePart = item.data_hora.includes('T') ? item.data_hora.split('T')[1] : item.data_hora;
+      const datePart = item.data_hora.includes('T') ? item.data_hora.split('T')[0] : selectedDate;
+      const [year, month, day] = datePart.split('-').map(Number);
+
       const { error } = await supabase
         .from('agendamentos')
         .update({ status: 'cancelado' })
@@ -160,11 +196,14 @@ export default function Home() {
         `A vaga foi liberada no sistema!`
       );
 
-      alert('Seu agendamento foi cancelado com sucesso. A vaga foi liberada no sistema!');
-      window.open(`https://wa.me/${WHATSAPP_BARBEARIA}?text=${msg}`, '_blank');
+      setToast({ id: Date.now().toString(), type: 'success', message: 'Seu agendamento foi cancelado com sucesso. Vaga liberada!' });
+      
+      setTimeout(() => {
+        window.open(`https://wa.me/${WHATSAPP_BARBEARIA}?text=${msg}`, '_blank');
+      }, 800);
     } catch (err) {
       console.error('Erro ao cancelar agendamento:', err);
-      alert('Ocorreu um erro ao cancelar o agendamento. Tente novamente.');
+      setToast({ id: Date.now().toString(), type: 'error', message: 'Ocorreu um erro ao cancelar o agendamento.' });
     } finally {
       setCancellingId(null);
     }
@@ -999,7 +1038,7 @@ export default function Home() {
 
                       <button
                         disabled={cancellingId === item.id}
-                        onClick={() => handleClientCancelBooking(item)}
+                        onClick={() => promptClientCancelBooking(item)}
                         className="w-full py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-semibold rounded-xl text-xs transition flex items-center justify-center gap-1.5"
                       >
                         {cancellingId === item.id ? (
@@ -1018,6 +1057,19 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      {/* Componentes de Notificação Customizados */}
+      <NotificationToast toast={toast} onClose={() => setToast(null)} />
+      
+      <CustomConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        confirmText="Sim, Cancelar"
+        cancelText="Voltar"
+        onConfirm={executeClientCancelBooking}
+        onCancel={() => setConfirmModal({ isOpen: false, title: '', message: '', item: null })}
+      />
     </main>
   );
 }

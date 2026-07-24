@@ -25,6 +25,7 @@ import {
   Ban,
   Loader2
 } from 'lucide-react';
+import { NotificationToast, CustomConfirmModal, ToastData } from '@/components/NotificationToast';
 
 interface AgendamentoCompleto {
   id: string;
@@ -50,6 +51,8 @@ export default function AdminPage() {
   const [filterBarbeiro, setFilterBarbeiro] = useState<string>('todos');
   const [filterStatus, setFilterStatus] = useState<string>('todos');
 
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
   // Inicializa data como Hoje
   useEffect(() => {
     const today = new Date();
@@ -57,15 +60,6 @@ export default function AdminPage() {
     const m = String(today.getMonth() + 1).padStart(2, '0');
     const d = String(today.getDate()).padStart(2, '0');
     setSelectedDate(`${y}-${m}-${d}`);
-  }, []);
-
-  // Busca barbeiros para os filtros
-  useEffect(() => {
-    async function fetchBarbeiros() {
-      const { data } = await supabase.from('barbeiros').select('*').order('nome');
-      if (data) setBarbeiros(data);
-    }
-    fetchBarbeiros();
   }, []);
 
   // Busca agendamentos da data selecionada
@@ -111,6 +105,58 @@ export default function AdminPage() {
     fetchAgendamentos();
   }, [fetchAgendamentos]);
 
+  // Escuta alterações em tempo real via Supabase Realtime
+  useEffect(() => {
+    const channel = supabase
+      .channel('realtime_admin_agendamentos')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'agendamentos' },
+        (payload: any) => {
+          console.log('Realtime event:', payload);
+          if (payload.eventType === 'UPDATE' && payload.new.status === 'cancelado') {
+            setToastMessage(`⚠️ ATENÇÃO: Um agendamento foi CANCELADO pelo cliente ou sistema!`);
+          } else if (payload.eventType === 'INSERT') {
+            setToastMessage(`✨ NOVO AGENDAMENTO: Um novo cliente agendou pelo site!`);
+          }
+          fetchAgendamentos();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [fetchAgendamentos]);
+
+  // Busca barbeiros para os filtros
+  useEffect(() => {
+    async function fetchBarbeiros() {
+      const { data } = await supabase.from('barbeiros').select('*').order('nome');
+      if (data) setBarbeiros(data);
+    }
+    fetchBarbeiros();
+  }, []);
+
+  // Mensagem WhatsApp para o cliente quando o barbeiro/admin cancela
+  const getClientCancellationWhatsAppLink = (item: AgendamentoCompleto) => {
+    const phone = item.cliente_telefone.replace(/\D/g, '');
+    const formattedPhone = phone.startsWith('55') ? phone : `55${phone}`;
+    
+    const timePart = item.data_hora.includes('T') ? item.data_hora.split('T')[1] : item.data_hora;
+    const timeStr = timePart.substring(0, 5);
+    const dateParts = selectedDate.split('-');
+    const dateFormatted = `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}`;
+
+    const msg = encodeURIComponent(
+      `Olá ${item.cliente_nome}! 💈\n\n` +
+      `Informamos que o seu agendamento na *Barbearia VIP* para *${item.servicos?.nome || 'Serviço'}* no dia *${dateFormatted} às ${timeStr}* com o barbeiro *${item.barbeiros?.nome || 'Profissional'}* precisou ser *CANCELADO*.\n\n` +
+      `Pedimos desculpas pelo inconveniente. Caso deseje remarcar para outro horário, acesse nosso site ou nos envie uma mensagem por aqui!`
+    );
+
+    return `https://wa.me/${formattedPhone}?text=${msg}`;
+  };
+
   // Validação: Cancelamentos só são permitidos com pelo menos 30 minutos de antecedência
   const canCancelAppointment = (dataHoraISO: string): { allowed: boolean; reason?: string } => {
     const timePart = dataHoraISO.includes('T') ? dataHoraISO.split('T')[1] : dataHoraISO;
@@ -122,7 +168,6 @@ export default function AdminPage() {
     const appointmentTime = new Date(year, month - 1, day, hours, minutes);
     const now = new Date();
 
-    // Diferença em milissegundos convertida para minutos
     const diffMs = appointmentTime.getTime() - now.getTime();
     const diffMinutes = Math.floor(diffMs / (1000 * 60));
 
@@ -136,12 +181,28 @@ export default function AdminPage() {
     return { allowed: true };
   };
 
+  const [toast, setToast] = useState<ToastData | null>(null);
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    action?: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: ''
+  });
+
   // Atualiza status do agendamento no Supabase
   const handleUpdateStatus = async (id: string, newStatus: StatusAgendamento, dataHoraISO?: string) => {
     if (newStatus === 'cancelado' && dataHoraISO) {
       const check = canCancelAppointment(dataHoraISO);
       if (!check.allowed) {
-        alert(check.reason);
+        setToast({
+          id: Date.now().toString(),
+          type: 'warning',
+          message: check.reason || 'Cancelamento não permitido com menos de 30 min de antecedência.'
+        });
         return;
       }
     }
@@ -155,13 +216,38 @@ export default function AdminPage() {
 
       if (error) throw error;
 
-      // Atualiza estado local instantaneamente
+      // Se for cancelamento feito pelo barbeiro/admin, abre o WhatsApp para notificar o cliente!
+      if (newStatus === 'cancelado') {
+        const itemCancelled = agendamentos.find((a) => a.id === id);
+        if (itemCancelled) {
+          const waUrl = getClientCancellationWhatsAppLink(itemCancelled);
+          setToast({
+            id: Date.now().toString(),
+            type: 'info',
+            message: `Agendamento de ${itemCancelled.cliente_nome} cancelado. Abrindo WhatsApp para avisar o cliente...`
+          });
+          setTimeout(() => {
+            window.open(waUrl, '_blank');
+          }, 600);
+        }
+      } else {
+        setToast({
+          id: Date.now().toString(),
+          type: 'success',
+          message: `Status do agendamento alterado para ${newStatus.toUpperCase()}.`
+        });
+      }
+
       setAgendamentos((prev) =>
         prev.map((item) => (item.id === id ? { ...item, status: newStatus } : item))
       );
     } catch (err) {
       console.error('Erro ao atualizar status:', err);
-      alert('Erro ao atualizar o status do agendamento.');
+      setToast({
+        id: Date.now().toString(),
+        type: 'error',
+        message: 'Erro ao atualizar o status do agendamento.'
+      });
     } finally {
       setUpdatingId(null);
     }
@@ -322,6 +408,21 @@ export default function AdminPage() {
           </div>
         </div>
       </header>
+
+      {toastMessage && (
+        <div className="bg-amber-500/20 border-b border-amber-500/40 px-4 py-3 text-amber-200 text-xs font-semibold flex items-center justify-between animate-in slide-in-from-top duration-300">
+          <div className="flex items-center gap-2">
+            <Sparkles size={16} className="text-amber-400 animate-pulse" />
+            <span>{toastMessage}</span>
+          </div>
+          <button
+            onClick={() => setToastMessage(null)}
+            className="p-1 px-2.5 bg-amber-500/20 hover:bg-amber-500/30 rounded-lg text-amber-300 transition font-bold"
+          >
+            Fechar
+          </button>
+        </div>
+      )}
 
       <div className="max-w-6xl mx-auto px-4 pt-6 space-y-6">
         
@@ -609,6 +710,22 @@ export default function AdminPage() {
           )}
         </div>
       </div>
+
+      {/* Componentes de Notificação Customizados */}
+      <NotificationToast toast={toast} onClose={() => setToast(null)} />
+
+      <CustomConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        confirmText="Confirmar"
+        cancelText="Voltar"
+        onConfirm={() => {
+          if (confirmModal.action) confirmModal.action();
+          setConfirmModal({ isOpen: false, title: '', message: '' });
+        }}
+        onCancel={() => setConfirmModal({ isOpen: false, title: '', message: '' })}
+      />
     </main>
   );
 }
