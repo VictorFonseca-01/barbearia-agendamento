@@ -21,7 +21,7 @@ import {
   MessageCircle
 } from 'lucide-react';
 
-const WHATSAPP_BARBEARIA = '5511999999999'; // Substitua pelo número real da barbearia
+const WHATSAPP_BARBEARIA = '5562999999999'; // DDD 62 de Goiânia
 
 export default function Home() {
   const [step, setStep] = useState<number>(1);
