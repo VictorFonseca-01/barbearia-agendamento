@@ -111,8 +111,41 @@ export default function AdminPage() {
     fetchAgendamentos();
   }, [fetchAgendamentos]);
 
+  // Validação: Cancelamentos só são permitidos com pelo menos 30 minutos de antecedência
+  const canCancelAppointment = (dataHoraISO: string): { allowed: boolean; reason?: string } => {
+    const timePart = dataHoraISO.includes('T') ? dataHoraISO.split('T')[1] : dataHoraISO;
+    const datePart = dataHoraISO.includes('T') ? dataHoraISO.split('T')[0] : selectedDate;
+    
+    const [year, month, day] = datePart.split('-').map(Number);
+    const [hours, minutes] = timePart.substring(0, 5).split(':').map(Number);
+
+    const appointmentTime = new Date(year, month - 1, day, hours, minutes);
+    const now = new Date();
+
+    // Diferença em milissegundos convertida para minutos
+    const diffMs = appointmentTime.getTime() - now.getTime();
+    const diffMinutes = Math.floor(diffMs / (1000 * 60));
+
+    if (diffMinutes < 30) {
+      return {
+        allowed: false,
+        reason: '⚠️ Não é possível cancelar este agendamento. Cancelamentos só são permitidos com pelo menos 30 minutos de antecedência do horário agendado.'
+      };
+    }
+
+    return { allowed: true };
+  };
+
   // Atualiza status do agendamento no Supabase
-  const handleUpdateStatus = async (id: string, newStatus: StatusAgendamento) => {
+  const handleUpdateStatus = async (id: string, newStatus: StatusAgendamento, dataHoraISO?: string) => {
+    if (newStatus === 'cancelado' && dataHoraISO) {
+      const check = canCancelAppointment(dataHoraISO);
+      if (!check.allowed) {
+        alert(check.reason);
+        return;
+      }
+    }
+
     setUpdatingId(id);
     try {
       const { error } = await supabase
@@ -192,10 +225,11 @@ export default function AdminPage() {
         return false;
       }
       // Filtro de Status
-      if (filterStatus !== 'todos' && item.status !== filterStatus) {
-        return false;
+      if (filterStatus === 'todos') {
+        // Por padrão, oculta agendamentos cancelados da aba geral
+        return item.status !== 'cancelado';
       }
-      return true;
+      return item.status === filterStatus;
     });
   }, [agendamentos, filterBarbeiro, filterStatus]);
 
@@ -558,7 +592,7 @@ export default function AdminPage() {
 
                           {item.status !== 'cancelado' && (
                             <button
-                              onClick={() => handleUpdateStatus(item.id, 'cancelado')}
+                              onClick={() => handleUpdateStatus(item.id, 'cancelado', item.data_hora)}
                               className="px-2.5 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-xl text-xs font-semibold transition"
                               title="Cancelar Agendamento"
                             >
