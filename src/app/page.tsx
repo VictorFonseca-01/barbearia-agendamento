@@ -17,6 +17,7 @@ import {
   Loader2,
   MapPin,
   Star,
+  Award,
   MessageCircle
 } from 'lucide-react';
 
