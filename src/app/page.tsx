@@ -41,6 +41,15 @@ interface MyBookingItem {
   servicos?: { nome: string; preco: number; duracao_minutos: number };
 }
 
+// 1. FEEDBACK TÁTIL (Haptics)
+const triggerHaptic = () => {
+  if (typeof window !== 'undefined' && 'vibrate' in navigator) {
+    try {
+      navigator.vibrate(12);
+    } catch (e) {}
+  }
+};
+
 // Auxiliar: Formatação automática de WhatsApp (XX) XXXXX-XXXX
 const formatPhone = (val: string) => {
   const digits = val.replace(/\D/g, '').slice(0, 11);
@@ -158,6 +167,7 @@ export default function Home() {
   // Busca agendamentos digitando número de WhatsApp
   const handleSearchByPhone = async (e: React.FormEvent) => {
     e.preventDefault();
+    triggerHaptic();
     if (!searchPhoneInput.trim()) return;
 
     const cleanPhone = searchPhoneInput.replace(/\D/g, '');
@@ -187,6 +197,7 @@ export default function Home() {
 
   // Regra de cancelamento (30 minutos de antecedência) com parsing seguro para Safari
   const promptClientCancelBooking = (item: MyBookingItem) => {
+    triggerHaptic();
     const timePart = item.data_hora.includes('T') ? item.data_hora.split('T')[1] : item.data_hora;
     const datePart = item.data_hora.includes('T') ? item.data_hora.split('T')[0] : selectedDate;
     
@@ -222,6 +233,7 @@ export default function Home() {
 
     setConfirmModal({ isOpen: false, title: '', message: '', item: null });
     setCancellingId(item.id);
+    triggerHaptic();
 
     try {
       const timePart = item.data_hora.includes('T') ? item.data_hora.split('T')[1] : item.data_hora;
@@ -379,7 +391,6 @@ export default function Home() {
   const isSlotDisabled = (timeStr: string) => {
     const slotStart = timeToMinutes(timeStr);
 
-    // BLOQUEIO DE HORÁRIOS PASSADOS SE A DATA FOR HOJE
     if (selectedDate === getTodayISO()) {
       const now = new Date();
       const currentMinutes = now.getHours() * 60 + now.getMinutes();
@@ -393,15 +404,12 @@ export default function Home() {
     const serviceDuration = selectedServico.duracao_minutos || 30;
     const slotEnd = slotStart + serviceDuration;
 
-    // Se ultrapassa 19:00 (1140 min)
     if (slotEnd > 1140) return true;
 
-    // Barbeiro específico
     if (selectedBarbeiro && selectedBarbeiro !== 'qualquer') {
       return isBarberBusy(selectedBarbeiro.id, slotStart, slotEnd);
     }
 
-    // Qualquer barbeiro: bloqueado apenas se TODOS estiverem ocupados
     if (barbeiros.length === 0) return true;
     return barbeiros.every((barber) => isBarberBusy(barber.id, slotStart, slotEnd));
   };
@@ -422,6 +430,7 @@ export default function Home() {
   // Submissão do agendamento
   const handleConfirmAgendamento = async (e: React.FormEvent) => {
     e.preventDefault();
+    triggerHaptic();
     setErrorMessage('');
 
     if (!selectedServico || !selectedBarbeiro || !selectedDate || !selectedTime || !clienteNome || !clienteTelefone) {
@@ -461,7 +470,6 @@ export default function Home() {
 
       if (error) throw error;
 
-      // MEMÓRIA DO CLIENTE: Salvar nome e telefone no localStorage
       try {
         localStorage.setItem('barbearia_cliente_nome', clienteNome.trim());
         localStorage.setItem('barbearia_cliente_telefone', clienteTelefone.trim());
@@ -535,8 +543,8 @@ export default function Home() {
             </div>
 
             <button
-              onClick={() => setShowMyBookingsModal(true)}
-              className="relative px-3 py-1.5 bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 text-amber-400 font-semibold rounded-xl text-xs flex items-center gap-1.5 transition"
+              onClick={() => { triggerHaptic(); setShowMyBookingsModal(true); }}
+              className="relative px-3 py-1.5 bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 text-amber-400 font-semibold rounded-xl text-xs flex items-center gap-1.5 transition active:scale-95"
             >
               <CalendarIcon size={14} />
               <span>Meus Agendamentos</span>
@@ -583,15 +591,16 @@ export default function Home() {
                 href={`https://wa.me/${whatsappBarbearia}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl flex items-center justify-center gap-2 transition shadow-lg shadow-emerald-600/20"
+                onClick={() => triggerHaptic()}
+                className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl flex items-center justify-center gap-2 transition shadow-lg shadow-emerald-600/20 active:scale-[0.98]"
               >
                 <MessageCircle size={20} />
                 Abrir WhatsApp da Barbearia
               </a>
 
               <button
-                onClick={() => setShowMyBookingsModal(true)}
-                className="w-full py-3.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 font-bold rounded-xl flex items-center justify-center gap-2 transition text-sm"
+                onClick={() => { triggerHaptic(); setShowMyBookingsModal(true); }}
+                className="w-full py-3.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 font-bold rounded-xl flex items-center justify-center gap-2 transition text-sm active:scale-[0.98]"
               >
                 <CalendarIcon size={18} />
                 Ver Meus Agendamentos
@@ -599,6 +608,7 @@ export default function Home() {
 
               <button
                 onClick={() => {
+                  triggerHaptic();
                   setCompleted(false);
                   setStep(1);
                   setSelectedServico(null);
@@ -606,7 +616,7 @@ export default function Home() {
                   setSelectedTime('');
                   setErrorMessage('');
                 }}
-                className="w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium rounded-xl transition text-sm"
+                className="w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium rounded-xl transition text-sm active:scale-[0.98]"
               >
                 Fazer Novo Agendamento
               </button>
@@ -624,7 +634,7 @@ export default function Home() {
                   Meus Agendamentos
                 </h3>
                 <button
-                  onClick={() => setShowMyBookingsModal(false)}
+                  onClick={() => { triggerHaptic(); setShowMyBookingsModal(false); }}
                   className="text-zinc-400 hover:text-zinc-100 text-xl font-bold p-1"
                 >
                   &times;
@@ -643,7 +653,7 @@ export default function Home() {
                   />
                   <button
                     type="submit"
-                    className="px-4 py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-xl hover:bg-amber-400 transition"
+                    className="px-4 py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-xl hover:bg-amber-400 transition active:scale-95"
                   >
                     Buscar
                   </button>
@@ -685,7 +695,7 @@ export default function Home() {
                         <button
                           disabled={cancellingId === item.id}
                           onClick={() => promptClientCancelBooking(item)}
-                          className="w-full py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-semibold rounded-xl text-xs transition flex items-center justify-center gap-1.5"
+                          className="w-full py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-semibold rounded-xl text-xs transition flex items-center justify-center gap-1.5 active:scale-95"
                         >
                           {cancellingId === item.id ? (
                             <>
@@ -720,7 +730,7 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col items-center justify-between pb-12">
+    <main className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col items-center justify-between pb-16">
       {/* Header Fixo */}
       <header className="w-full bg-zinc-900/90 backdrop-blur-md border-b border-zinc-800/80 sticky top-0 z-50">
         <div className="max-w-md mx-auto px-4 py-3.5 flex items-center justify-between">
@@ -739,8 +749,8 @@ export default function Home() {
             </div>
           </div>
           <button
-            onClick={() => setShowMyBookingsModal(true)}
-            className="relative px-3 py-1.5 bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 text-amber-400 font-semibold rounded-xl text-xs flex items-center gap-1.5 transition"
+            onClick={() => { triggerHaptic(); setShowMyBookingsModal(true); }}
+            className="relative px-3 py-1.5 bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 text-amber-400 font-semibold rounded-xl text-xs flex items-center gap-1.5 transition active:scale-95"
           >
             <CalendarIcon size={14} />
             <span>Meus Agendamentos</span>
@@ -768,7 +778,12 @@ export default function Home() {
             return (
               <div
                 key={item.num}
-                onClick={() => isDone && setStep(item.num)}
+                onClick={() => {
+                  if (isDone) {
+                    triggerHaptic();
+                    setStep(item.num);
+                  }
+                }}
                 className={`flex flex-col items-center gap-1 text-xs cursor-pointer transition ${
                   isActive ? 'text-amber-400 font-bold' : isDone ? 'text-zinc-300' : 'text-zinc-600'
                 }`}
@@ -798,16 +813,36 @@ export default function Home() {
           </div>
         )}
 
+        {/* 4. SKELETON LOADERS ELEGANTES */}
         {loadingData ? (
-          <div className="py-20 flex flex-col items-center justify-center space-y-3 text-zinc-400">
-            <Loader2 size={32} className="animate-spin text-amber-500" />
-            <p className="text-sm">Carregando serviços da barbearia...</p>
+          <div className="space-y-3 py-4 animate-in fade-in duration-300">
+            <div className="p-4 rounded-2xl border border-zinc-800/80 bg-zinc-900/60 animate-pulse h-20 flex items-center justify-between">
+              <div className="space-y-2">
+                <div className="h-4 w-32 bg-zinc-800 rounded-md" />
+                <div className="h-3 w-20 bg-zinc-800/60 rounded-md" />
+              </div>
+              <div className="h-6 w-16 bg-zinc-800 rounded-md" />
+            </div>
+            <div className="p-4 rounded-2xl border border-zinc-800/80 bg-zinc-900/60 animate-pulse h-20 flex items-center justify-between">
+              <div className="space-y-2">
+                <div className="h-4 w-36 bg-zinc-800 rounded-md" />
+                <div className="h-3 w-24 bg-zinc-800/60 rounded-md" />
+              </div>
+              <div className="h-6 w-16 bg-zinc-800 rounded-md" />
+            </div>
+            <div className="p-4 rounded-2xl border border-zinc-800/80 bg-zinc-900/60 animate-pulse h-20 flex items-center justify-between">
+              <div className="space-y-2">
+                <div className="h-4 w-40 bg-zinc-800 rounded-md" />
+                <div className="h-3 w-28 bg-zinc-800/60 rounded-md" />
+              </div>
+              <div className="h-6 w-16 bg-zinc-800 rounded-md" />
+            </div>
           </div>
         ) : (
           <>
             {/* PASSO 1: Serviço */}
             {step === 1 && (
-              <div className="space-y-4 animate-in fade-in duration-300">
+              <div className="space-y-4 animate-in fade-in duration-300 pb-16">
                 <div>
                   <h2 className="text-xl font-bold text-zinc-100 flex items-center gap-2">
                     <Scissors className="text-amber-500" size={20} />
@@ -823,12 +858,13 @@ export default function Home() {
                       <div
                         key={servico.id}
                         onClick={() => {
+                          triggerHaptic();
                           setSelectedServico(servico);
                           setSelectedTime('');
                         }}
-                        className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
+                        className={`p-4 rounded-2xl border transition-all duration-200 active:scale-[0.98] cursor-pointer flex items-center justify-between ${
                           isSelected
-                            ? 'bg-gradient-to-r from-amber-500/10 to-zinc-900 border-amber-500 ring-1 ring-amber-500 shadow-lg shadow-amber-500/10'
+                            ? 'bg-gradient-to-r from-amber-500/10 to-zinc-900 border-amber-500 ring-1 ring-amber-500 shadow-[0_0_20px_rgba(245,158,11,0.15)]'
                             : 'bg-zinc-900/60 border-zinc-800/80 hover:border-zinc-700'
                         }`}
                       >
@@ -857,19 +893,22 @@ export default function Home() {
                   })}
                 </div>
 
-                <button
-                  disabled={!selectedServico}
-                  onClick={() => setStep(2)}
-                  className="w-full py-4 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-950 font-bold rounded-2xl flex items-center justify-center gap-2 transition shadow-xl shadow-amber-500/20 text-base"
-                >
-                  Continuar para Barbeiro <ChevronRight size={20} />
-                </button>
+                {/* 2. STICKY CTA FOOTER MOBILE */}
+                <div className="sticky bottom-0 bg-zinc-950/80 backdrop-blur-md p-4 border-t border-zinc-800/80 z-40 -mx-4 -mb-16 mt-6">
+                  <button
+                    disabled={!selectedServico}
+                    onClick={() => { triggerHaptic(); setStep(2); }}
+                    className="w-full py-4 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-950 font-bold rounded-2xl flex items-center justify-center gap-2 transition shadow-xl shadow-amber-500/20 text-base active:scale-[0.98]"
+                  >
+                    Continuar para Barbeiro <ChevronRight size={20} />
+                  </button>
+                </div>
               </div>
             )}
 
             {/* PASSO 2: Barbeiro */}
             {step === 2 && (
-              <div className="space-y-4 animate-in fade-in duration-300">
+              <div className="space-y-4 animate-in fade-in duration-300 pb-16">
                 <div>
                   <h2 className="text-xl font-bold text-zinc-100 flex items-center gap-2">
                     <User className="text-amber-500" size={20} />
@@ -881,12 +920,13 @@ export default function Home() {
                 <div className="space-y-3">
                   <div
                     onClick={() => {
+                      triggerHaptic();
                       setSelectedBarbeiro('qualquer');
                       setSelectedTime('');
                     }}
-                    className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center gap-4 ${
+                    className={`p-4 rounded-2xl border transition-all duration-200 active:scale-[0.98] cursor-pointer flex items-center gap-4 ${
                       selectedBarbeiro === 'qualquer'
-                        ? 'bg-amber-500/10 border-amber-500 ring-1 ring-amber-500 shadow-lg shadow-amber-500/10'
+                        ? 'bg-amber-500/10 border-amber-500 ring-1 ring-amber-500 shadow-[0_0_20px_rgba(245,158,11,0.15)]'
                         : 'bg-zinc-900/60 border-zinc-800/80 hover:border-zinc-700'
                     }`}
                   >
@@ -912,27 +952,35 @@ export default function Home() {
                       <div
                         key={barbeiro.id}
                         onClick={() => {
+                          triggerHaptic();
                           setSelectedBarbeiro(barbeiro);
                           setSelectedTime('');
                         }}
-                        className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center gap-4 ${
+                        className={`p-4 rounded-2xl border transition-all duration-200 active:scale-[0.98] cursor-pointer flex items-center gap-4 ${
                           isSelected
-                            ? 'bg-amber-500/10 border-amber-500 ring-1 ring-amber-500 shadow-lg shadow-amber-500/10'
+                            ? 'bg-amber-500/10 border-amber-500 ring-1 ring-amber-500 shadow-[0_0_20px_rgba(245,158,11,0.15)]'
                             : 'bg-zinc-900/60 border-zinc-800/80 hover:border-zinc-700'
                         }`}
                       >
-                        <img
-                          src={barbeiro.foto_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'}
-                          alt={barbeiro.nome}
-                          className="w-12 h-12 rounded-xl object-cover border border-zinc-700"
-                        />
+                        {/* 5. BARBEIRO ONLINE BADGE */}
+                        <div className="relative">
+                          <img
+                            src={barbeiro.foto_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'}
+                            alt={barbeiro.nome}
+                            className="w-12 h-12 rounded-xl object-cover border border-zinc-700"
+                          />
+                          <span className="absolute -bottom-1 -right-1 flex h-3.5 w-3.5 items-center justify-center">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500 border border-zinc-950"></span>
+                          </span>
+                        </div>
                         <div className="flex-1">
                           <h3 className="font-semibold text-zinc-100 text-base flex items-center gap-1.5">
                             {barbeiro.nome}
                             <Award size={14} className="text-amber-400" />
                           </h3>
                           <p className="text-xs text-emerald-400 flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Ativo na Barbearia
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Disponível Hoje
                           </p>
                         </div>
                         <div
@@ -947,17 +995,18 @@ export default function Home() {
                   })}
                 </div>
 
-                <div className="flex gap-3 pt-2">
+                {/* 2. STICKY CTA FOOTER MOBILE */}
+                <div className="sticky bottom-0 bg-zinc-950/80 backdrop-blur-md p-4 border-t border-zinc-800/80 z-40 -mx-4 -mb-16 mt-6 flex gap-3">
                   <button
-                    onClick={() => setStep(1)}
-                    className="py-4 px-5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 font-semibold rounded-2xl transition"
+                    onClick={() => { triggerHaptic(); setStep(1); }}
+                    className="py-4 px-5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 font-semibold rounded-2xl transition active:scale-[0.98]"
                   >
                     <ChevronLeft size={20} />
                   </button>
                   <button
                     disabled={!selectedBarbeiro}
-                    onClick={() => setStep(3)}
-                    className="flex-1 py-4 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-950 font-bold rounded-2xl flex items-center justify-center gap-2 transition shadow-xl shadow-amber-500/20 text-base"
+                    onClick={() => { triggerHaptic(); setStep(3); }}
+                    className="flex-1 py-4 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-950 font-bold rounded-2xl flex items-center justify-center gap-2 transition shadow-xl shadow-amber-500/20 text-base active:scale-[0.98]"
                   >
                     Escolher Horário <ChevronRight size={20} />
                   </button>
@@ -967,7 +1016,7 @@ export default function Home() {
 
             {/* PASSO 3: Data e Horário */}
             {step === 3 && (
-              <div className="space-y-5 animate-in fade-in duration-300">
+              <div className="space-y-5 animate-in fade-in duration-300 pb-16">
                 <div>
                   <h2 className="text-xl font-bold text-zinc-100 flex items-center gap-2">
                     <CalendarIcon className="text-amber-500" size={20} />
@@ -988,12 +1037,13 @@ export default function Home() {
                         <button
                           key={item.iso}
                           onClick={() => {
+                            triggerHaptic();
                             setSelectedDate(item.iso);
                             setSelectedTime('');
                           }}
-                          className={`flex-shrink-0 w-16 py-3 rounded-2xl border flex flex-col items-center gap-1 transition ${
+                          className={`flex-shrink-0 w-16 py-3 rounded-2xl border flex flex-col items-center gap-1 transition-all duration-200 active:scale-[0.98] ${
                             isSelected
-                              ? 'bg-amber-500 border-amber-500 text-zinc-950 font-bold shadow-lg shadow-amber-500/20'
+                              ? 'bg-amber-500 border-amber-500 text-zinc-950 font-bold shadow-[0_0_20px_rgba(245,158,11,0.2)]'
                               : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-700'
                           }`}
                         >
@@ -1023,12 +1073,15 @@ export default function Home() {
                         <button
                           key={time}
                           disabled={disabled}
-                          onClick={() => setSelectedTime(time)}
-                          className={`py-3 rounded-xl border text-sm font-semibold transition ${
+                          onClick={() => {
+                            triggerHaptic();
+                            setSelectedTime(time);
+                          }}
+                          className={`py-3 rounded-xl border text-sm font-semibold transition-all duration-200 active:scale-[0.98] ${
                             disabled
                               ? 'bg-zinc-950/80 border-zinc-900 text-zinc-700 line-through cursor-not-allowed'
                               : isSelected
-                              ? 'bg-amber-500 border-amber-500 text-zinc-950 shadow-md shadow-amber-500/20'
+                              ? 'bg-amber-500 border-amber-500 text-zinc-950 shadow-[0_0_15px_rgba(245,158,11,0.25)]'
                               : 'bg-zinc-900 border-zinc-800 text-zinc-200 hover:border-amber-500/50'
                           }`}
                         >
@@ -1039,17 +1092,18 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="flex gap-3 pt-2">
+                {/* 2. STICKY CTA FOOTER MOBILE */}
+                <div className="sticky bottom-0 bg-zinc-950/80 backdrop-blur-md p-4 border-t border-zinc-800/80 z-40 -mx-4 -mb-16 mt-6 flex gap-3">
                   <button
-                    onClick={() => setStep(2)}
-                    className="py-4 px-5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 font-semibold rounded-2xl transition"
+                    onClick={() => { triggerHaptic(); setStep(2); }}
+                    className="py-4 px-5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 font-semibold rounded-2xl transition active:scale-[0.98]"
                   >
                     <ChevronLeft size={20} />
                   </button>
                   <button
                     disabled={!selectedDate || !selectedTime}
-                    onClick={() => setStep(4)}
-                    className="flex-1 py-4 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-950 font-bold rounded-2xl flex items-center justify-center gap-2 transition shadow-xl shadow-amber-500/20 text-base"
+                    onClick={() => { triggerHaptic(); setStep(4); }}
+                    className="flex-1 py-4 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-950 font-bold rounded-2xl flex items-center justify-center gap-2 transition shadow-xl shadow-amber-500/20 text-base active:scale-[0.98]"
                   >
                     Preencher Seus Dados <ChevronRight size={20} />
                   </button>
@@ -1068,7 +1122,7 @@ export default function Home() {
                   <p className="text-zinc-400 text-xs mt-1">Informe seu nome e WhatsApp para a confirmação</p>
                 </div>
 
-                <div className="bg-zinc-900/90 border border-zinc-800/80 rounded-2xl p-4 space-y-2.5">
+                <div className="bg-zinc-900/90 border border-zinc-800/80 rounded-2xl p-4 space-y-2.5 shadow-lg shadow-black/30">
                   <h3 className="text-xs font-semibold text-amber-400 uppercase tracking-wider mb-2">Resumo da Reserva</h3>
                   <div className="flex justify-between text-sm">
                     <span className="text-zinc-400">Serviço:</span>
@@ -1129,15 +1183,15 @@ export default function Home() {
                 <div className="flex gap-3 pt-2">
                   <button
                     type="button"
-                    onClick={() => setStep(3)}
-                    className="py-4 px-5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 font-semibold rounded-2xl transition"
+                    onClick={() => { triggerHaptic(); setStep(3); }}
+                    className="py-4 px-5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 font-semibold rounded-2xl transition active:scale-[0.98]"
                   >
                     <ChevronLeft size={20} />
                   </button>
                   <button
                     type="submit"
                     disabled={submitting || !clienteNome || !clienteTelefone}
-                    className="flex-1 py-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-2xl flex items-center justify-center gap-2 transition shadow-xl shadow-emerald-600/20 text-base"
+                    className="flex-1 py-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-2xl flex items-center justify-center gap-2 transition shadow-xl shadow-emerald-600/20 text-base active:scale-[0.98]"
                   >
                     {submitting ? (
                       <>
@@ -1170,7 +1224,7 @@ export default function Home() {
                 Meus Agendamentos
               </h3>
               <button
-                onClick={() => setShowMyBookingsModal(false)}
+                onClick={() => { triggerHaptic(); setShowMyBookingsModal(false); }}
                 className="text-zinc-400 hover:text-zinc-100 text-xl font-bold p-1"
               >
                 &times;
@@ -1190,7 +1244,7 @@ export default function Home() {
                 />
                 <button
                   type="submit"
-                  className="px-4 py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-xl hover:bg-amber-400 transition"
+                  className="px-4 py-2.5 bg-amber-500 text-zinc-950 font-bold text-xs rounded-xl hover:bg-amber-400 transition active:scale-95"
                 >
                   Buscar
                 </button>
@@ -1234,7 +1288,7 @@ export default function Home() {
                       <button
                         disabled={cancellingId === item.id}
                         onClick={() => promptClientCancelBooking(item)}
-                        className="w-full py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-semibold rounded-xl text-xs transition flex items-center justify-center gap-1.5"
+                        className="w-full py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-semibold rounded-xl text-xs transition flex items-center justify-center gap-1.5 active:scale-95"
                       >
                         {cancellingId === item.id ? (
                           <>
