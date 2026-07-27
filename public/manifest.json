@@ -1,11 +1,11 @@
 {
   "name": "Barbearia VIP",
   "short_name": "Barbearia VIP",
-  "description": "Sistema de agendamento online para corte de cabelo e barba em menos de 1 minuto.",
+  "description": "Agendamento online rápido e descomplicado em menos de 1 minuto.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#09090b",
-  "theme_color": "#09090b",
+  "theme_color": "#f59e0b",
   "orientation": "portrait",
   "icons": [
     {

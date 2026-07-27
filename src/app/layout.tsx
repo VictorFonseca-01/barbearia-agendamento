@@ -1,9 +1,17 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
+export const viewport: Viewport = {
+  themeColor: '#09090b',
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+};
+
 export const metadata: Metadata = {
-  title: 'Barbearia VIP | Agende seu Horário Online',
-  description: 'Agendamento rápido e descomplicado para corte de cabelo e barba em menos de 1 minuto.',
+  title: 'Barbearia VIP | Agendamento Online Rápido',
+  description: 'Agende seu horário com os melhores barbeiros em menos de 1 minuto.',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
@@ -13,14 +21,6 @@ export const metadata: Metadata = {
   formatDetection: {
     telephone: false,
   },
-};
-
-export const viewport: Viewport = {
-  themeColor: '#09090b',
-  width: 'device-width',
-  initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
 };
 
 export default function RootLayout({
