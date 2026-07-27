@@ -41,6 +41,24 @@ interface MyBookingItem {
   servicos?: { nome: string; preco: number; duracao_minutos: number };
 }
 
+// Auxiliar: Formatação automática de WhatsApp (XX) XXXXX-XXXX
+const formatPhone = (val: string) => {
+  const digits = val.replace(/\D/g, '').slice(0, 11);
+  if (!digits) return '';
+  if (digits.length <= 2) return `(${digits}`;
+  if (digits.length <= 7) return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
+  return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+};
+
+// Auxiliar: Retorna data de hoje em YYYY-MM-DD (fuso local sem deslocamento de UTC)
+const getTodayISO = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 export default function Home() {
   const [step, setStep] = useState<number>(1);
   const [servicos, setServicos] = useState<Servico[]>([]);
@@ -73,6 +91,18 @@ export default function Home() {
   const [selectedTime, setSelectedTime] = useState<string>('');
   const [clienteNome, setClienteNome] = useState<string>('');
   const [clienteTelefone, setClienteTelefone] = useState<string>('');
+
+  // Memória do Cliente (localStorage)
+  useEffect(() => {
+    try {
+      const savedName = localStorage.getItem('barbearia_cliente_nome');
+      const savedPhone = localStorage.getItem('barbearia_cliente_telefone');
+      if (savedName) setClienteNome(savedName);
+      if (savedPhone) setClienteTelefone(formatPhone(savedPhone));
+    } catch (e) {
+      console.error('Erro ao carregar memória do cliente:', e);
+    }
+  }, []);
 
   // Agendamentos ocupados no dia
   const [existingAppointments, setExistingAppointments] = useState<ExistingAppointment[]>([]);
@@ -125,7 +155,7 @@ export default function Home() {
     loadMyBookings();
   }, [loadMyBookings]);
 
-  // Busca agendamentos digitando número de WhatsApp (caso tenha trocado de aparelho)
+  // Busca agendamentos digitando número de WhatsApp
   const handleSearchByPhone = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchPhoneInput.trim()) return;
@@ -155,7 +185,7 @@ export default function Home() {
     }
   };
 
-  // Abre a modal customizada de confirmação de cancelamento
+  // Regra de cancelamento (30 minutos de antecedência) com parsing seguro para Safari
   const promptClientCancelBooking = (item: MyBookingItem) => {
     const timePart = item.data_hora.includes('T') ? item.data_hora.split('T')[1] : item.data_hora;
     const datePart = item.data_hora.includes('T') ? item.data_hora.split('T')[0] : selectedDate;
@@ -185,7 +215,7 @@ export default function Home() {
     });
   };
 
-  // Executa a confirmação do cancelamento pelo cliente
+  // Executa o cancelamento pelo cliente
   const executeClientCancelBooking = async () => {
     const item = confirmModal.item;
     if (!item) return;
@@ -248,19 +278,14 @@ export default function Home() {
     }
     fetchData();
 
-    // Data padrão: Hoje no formato YYYY-MM-DD local
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    setSelectedDate(`${year}-${month}-${day}`);
+    // Data padrão: Hoje no formato YYYY-MM-DD local (sem fuso Safari bug)
+    setSelectedDate(getTodayISO());
   }, []);
 
-  // 2. Função recarregável para buscar agendamentos do dia
+  // 2. Busca agendamentos do dia
   const fetchDayAppointments = useCallback(async () => {
     if (!selectedDate) return;
     try {
-      // Intervalo do dia local
       const startOfDay = `${selectedDate}T00:00:00`;
       const endOfDay = `${selectedDate}T23:59:59`;
 
@@ -298,18 +323,20 @@ export default function Home() {
     }
   }, [selectedDate]);
 
-  // Recarrega os agendamentos sempre que mudar a data, o passo (wizard) ou o barbeiro
   useEffect(() => {
     fetchDayAppointments();
   }, [fetchDayAppointments, step, selectedBarbeiro]);
 
-  // Gera os próximos 7 dias no fuso horário local
+  // Safari (iOS) Date Safe generator: cria os 7 dias usando construtor com inteiros
   const datesList = useMemo(() => {
     const dates = [];
-    const today = new Date();
+    const now = new Date();
+    const currYear = now.getFullYear();
+    const currMonth = now.getMonth();
+    const currDay = now.getDate();
+
     for (let i = 0; i < 7; i++) {
-      const d = new Date(today);
-      d.setDate(today.getDate() + i);
+      const d = new Date(currYear, currMonth, currDay + i);
       const year = d.getFullYear();
       const month = String(d.getMonth() + 1).padStart(2, '0');
       const dayNum = String(d.getDate()).padStart(2, '0');
@@ -334,44 +361,52 @@ export default function Home() {
     return slots;
   }, []);
 
-  // Converte "HH:MM" para minutos a partir da meia-noite
+  // Converte "HH:MM" para minutos
   const timeToMinutes = (timeStr: string) => {
     const [h, m] = timeStr.split(':').map(Number);
     return h * 60 + m;
   };
 
-  // Verifica se um barbeiro específico está ocupado em um intervalo de tempo [start, end)
+  // Verifica se um barbeiro específico está ocupado
   const isBarberBusy = (barberId: string, slotStart: number, slotEnd: number) => {
     return existingAppointments.some((app) => {
       if (app.barbeiro_id !== barberId) return false;
-      // Há sobreposição se max(start1, start2) < min(end1, end2)
       return Math.max(slotStart, app.startMinutes) < Math.min(slotEnd, app.endMinutes);
     });
   };
 
-  // Determina se um horário está bloqueado para o serviço e barbeiro selecionados
+  // Determina se um horário está bloqueado (Horários passados hoje + Ocupação)
   const isSlotDisabled = (timeStr: string) => {
+    const slotStart = timeToMinutes(timeStr);
+
+    // BLOQUEIO DE HORÁRIOS PASSADOS SE A DATA FOR HOJE
+    if (selectedDate === getTodayISO()) {
+      const now = new Date();
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      if (slotStart <= currentMinutes) {
+        return true;
+      }
+    }
+
     if (!selectedServico) return false;
 
-    const slotStart = timeToMinutes(timeStr);
     const serviceDuration = selectedServico.duracao_minutos || 30;
     const slotEnd = slotStart + serviceDuration;
 
-    // Se o serviço ultrapassa o horário de funcionamento da barbearia (19:00 = 1140 min)
+    // Se ultrapassa 19:00 (1140 min)
     if (slotEnd > 1140) return true;
 
-    // Se o cliente escolheu um barbeiro específico
+    // Barbeiro específico
     if (selectedBarbeiro && selectedBarbeiro !== 'qualquer') {
       return isBarberBusy(selectedBarbeiro.id, slotStart, slotEnd);
     }
 
-    // Se escolheu "Qualquer Barbeiro": o horário só estará bloqueado se TODOS os barbeiros ativos estiverem ocupados
+    // Qualquer barbeiro: bloqueado apenas se TODOS estiverem ocupados
     if (barbeiros.length === 0) return true;
-    const allBarbersBusy = barbeiros.every((barber) => isBarberBusy(barber.id, slotStart, slotEnd));
-    return allBarbersBusy;
+    return barbeiros.every((barber) => isBarberBusy(barber.id, slotStart, slotEnd));
   };
 
-  // Encontra um barbeiro disponível para o horário e serviço selecionados
+  // Retorna barbeiro disponível para o horário
   const getAvailableBarberForSlot = (timeStr: string): Barbeiro | null => {
     if (selectedBarbeiro && selectedBarbeiro !== 'qualquer') {
       return selectedBarbeiro;
@@ -381,12 +416,10 @@ export default function Home() {
     const serviceDuration = selectedServico?.duracao_minutos || 30;
     const slotEnd = slotStart + serviceDuration;
 
-    // Encontra o primeiro barbeiro livre no horário
-    const freeBarber = barbeiros.find((barber) => !isBarberBusy(barber.id, slotStart, slotEnd));
-    return freeBarber || null;
+    return barbeiros.find((barber) => !isBarberBusy(barber.id, slotStart, slotEnd)) || null;
   };
 
-  // Submissão do formulário de agendamento
+  // Submissão do agendamento
   const handleConfirmAgendamento = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
@@ -396,7 +429,6 @@ export default function Home() {
       return;
     }
 
-    // Determina o barbeiro final
     const assignedBarber = getAvailableBarberForSlot(selectedTime);
     if (!assignedBarber) {
       setErrorMessage('Desculpe, o barbeiro selecionado não está mais disponível neste horário. Escolha outro horário.');
@@ -406,7 +438,6 @@ export default function Home() {
     setSubmitting(true);
 
     try {
-      // Re-validação anti-conflito no servidor antes de inserir
       const slotStart = timeToMinutes(selectedTime);
       const serviceDuration = selectedServico.duracao_minutos || 30;
       const slotEnd = slotStart + serviceDuration;
@@ -415,7 +446,6 @@ export default function Home() {
         throw new Error('Este horário já foi preenchido por outro cliente. Por favor, escolha outro horário.');
       }
 
-      // Formata data e hora ISO
       const dataHoraISO = `${selectedDate}T${selectedTime}:00`;
 
       const { data: insertedData, error } = await supabase.from('agendamentos').insert([
@@ -431,26 +461,27 @@ export default function Home() {
 
       if (error) throw error;
 
-      // Salva ID no dispositivo do cliente
-      if (insertedData && insertedData.length > 0) {
-        try {
+      // MEMÓRIA DO CLIENTE: Salvar nome e telefone no localStorage
+      try {
+        localStorage.setItem('barbearia_cliente_nome', clienteNome.trim());
+        localStorage.setItem('barbearia_cliente_telefone', clienteTelefone.trim());
+
+        if (insertedData && insertedData.length > 0) {
           const storedIds = JSON.parse(localStorage.getItem('barbearia_meus_ids') || '[]');
           storedIds.push(insertedData[0].id);
           localStorage.setItem('barbearia_meus_ids', JSON.stringify(storedIds));
-        } catch (e) {
-          console.error(e);
         }
+      } catch (e) {
+        console.error('Erro ao salvar no localStorage:', e);
       }
 
-      // Recarrega agendamentos do dia e meus agendamentos
       await fetchDayAppointments();
       await loadMyBookings();
 
       setCompleted(true);
 
-      // Prepara mensagem formatada do WhatsApp
-      const dataParts = selectedDate.split('-');
-      const dataFormatada = `${dataParts[2]}/${dataParts[1]}/${dataParts[0]}`;
+      const [year, month, day] = selectedDate.split('-');
+      const dataFormatada = `${day}/${month}/${year}`;
 
       const mensagemWhatsApp = encodeURIComponent(
         `Olá! Fiz um agendamento pelo site online:\n\n` +
@@ -482,9 +513,10 @@ export default function Home() {
       ? getAvailableBarberForSlot(selectedTime)?.nome || 'Profissional da Casa' 
       : selectedBarbeiro?.nome;
 
+    const [compYear, compMonth, compDay] = selectedDate.split('-');
+
     return (
       <main className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col items-center justify-between pb-12">
-        {/* Header Fixo */}
         <header className="w-full bg-zinc-900/90 backdrop-blur-md border-b border-zinc-800/80 sticky top-0 z-50 mb-4">
           <div className="max-w-md mx-auto px-4 py-3.5 flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -538,7 +570,7 @@ export default function Home() {
               </div>
               <div className="flex justify-between items-center text-sm border-b border-zinc-800 pb-2">
                 <span className="text-zinc-400">Data & Hora</span>
-                <span className="font-medium text-zinc-200">{selectedDate.split('-').reverse().join('/')} às {selectedTime}</span>
+                <span className="font-medium text-zinc-200">{compDay}/{compMonth}/{compYear} às {selectedTime}</span>
               </div>
               <div className="flex justify-between items-center text-sm">
                 <span className="text-zinc-400">Valor</span>
@@ -572,8 +604,6 @@ export default function Home() {
                   setSelectedServico(null);
                   setSelectedBarbeiro(null);
                   setSelectedTime('');
-                  setClienteNome('');
-                  setClienteTelefone('');
                   setErrorMessage('');
                 }}
                 className="w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium rounded-xl transition text-sm"
@@ -584,7 +614,7 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Modal de Meus Agendamentos na tela de confirmação */}
+        {/* Modal de Meus Agendamentos */}
         {showMyBookingsModal && (
           <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-3xl p-6 space-y-5 relative max-h-[90vh] overflow-y-auto shadow-2xl text-left">
@@ -601,7 +631,6 @@ export default function Home() {
                 </button>
               </div>
 
-              {/* Busca por Telefone (Mini Login) */}
               <form onSubmit={handleSearchByPhone} className="space-y-2 bg-zinc-950/60 p-3.5 border border-zinc-800/80 rounded-2xl">
                 <label className="text-xs text-zinc-400 font-medium block">Trocou de celular? Busque seu WhatsApp:</label>
                 <div className="flex gap-2">
@@ -609,7 +638,7 @@ export default function Home() {
                     type="tel"
                     placeholder="(62) 99999-9999"
                     value={searchPhoneInput}
-                    onChange={(e) => setSearchPhoneInput(e.target.value)}
+                    onChange={(e) => setSearchPhoneInput(formatPhone(e.target.value))}
                     className="flex-1 bg-zinc-900 border border-zinc-800 text-zinc-200 text-xs rounded-xl px-3 py-2.5 outline-none focus:border-amber-500"
                   />
                   <button
@@ -621,7 +650,6 @@ export default function Home() {
                 </div>
               </form>
 
-              {/* Lista de Agendamentos Ativos do Cliente */}
               <div className="space-y-3 pt-1">
                 {myBookings.length === 0 ? (
                   <div className="py-8 text-center text-zinc-500 text-sm space-y-1">
@@ -796,7 +824,7 @@ export default function Home() {
                         key={servico.id}
                         onClick={() => {
                           setSelectedServico(servico);
-                          setSelectedTime(''); // Limpa horário ao mudar serviço
+                          setSelectedTime('');
                         }}
                         className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
                           isSelected
@@ -937,7 +965,7 @@ export default function Home() {
               </div>
             )}
 
-            {/* PASSO 3: Data e Horário com Cálculo Inteligente de Duração */}
+            {/* PASSO 3: Data e Horário */}
             {step === 3 && (
               <div className="space-y-5 animate-in fade-in duration-300">
                 <div>
@@ -950,7 +978,7 @@ export default function Home() {
                   </p>
                 </div>
 
-                {/* Seleção de Data */}
+                {/* Seleção de Data (Safari-Safe) */}
                 <div className="space-y-2">
                   <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Data</label>
                   <div className="flex gap-2.5 overflow-x-auto pb-2 scrollbar-none">
@@ -978,7 +1006,7 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* Grid de Horários Calculados sem Sobreposição */}
+                {/* Grid de Horários Calculados com Bloqueio de Horários Passados */}
                 <div className="space-y-2">
                   <div className="flex justify-between items-center">
                     <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Horários Disponíveis</label>
@@ -1029,7 +1057,7 @@ export default function Home() {
               </div>
             )}
 
-            {/* PASSO 4: Dados do Cliente e Confirmação */}
+            {/* PASSO 4: Dados do Cliente com Máscara e Memória */}
             {step === 4 && (
               <form onSubmit={handleConfirmAgendamento} className="space-y-5 animate-in fade-in duration-300">
                 <div>
@@ -1056,7 +1084,9 @@ export default function Home() {
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-zinc-400">Data & Hora:</span>
-                    <span className="font-medium text-zinc-200">{selectedDate.split('-').reverse().join('/')} às {selectedTime}</span>
+                    <span className="font-medium text-zinc-200">
+                      {selectedDate.split('-').reverse().join('/')} às {selectedTime}
+                    </span>
                   </div>
                   <div className="flex justify-between text-sm border-t border-zinc-800 pt-2 font-bold">
                     <span className="text-zinc-300">Total a pagar:</span>
@@ -1089,7 +1119,7 @@ export default function Home() {
                         required
                         placeholder="(62) 99999-9999"
                         value={clienteTelefone}
-                        onChange={(e) => setClienteTelefone(e.target.value)}
+                        onChange={(e) => setClienteTelefone(formatPhone(e.target.value))}
                         className="w-full bg-zinc-900 border border-zinc-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 rounded-xl py-3 pl-10 pr-4 text-sm text-zinc-100 placeholder-zinc-500 outline-none transition"
                       />
                     </div>
@@ -1155,7 +1185,7 @@ export default function Home() {
                   type="tel"
                   placeholder="(62) 99999-9999"
                   value={searchPhoneInput}
-                  onChange={(e) => setSearchPhoneInput(e.target.value)}
+                  onChange={(e) => setSearchPhoneInput(formatPhone(e.target.value))}
                   className="flex-1 bg-zinc-900 border border-zinc-800 text-zinc-200 text-xs rounded-xl px-3 py-2.5 outline-none focus:border-amber-500"
                 />
                 <button
